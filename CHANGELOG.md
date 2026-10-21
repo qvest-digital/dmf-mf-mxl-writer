@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.5](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.4...v1.0.0-rc.5) (2026-10-21)
+
+
+### Bug Fixes
+
+* **deps:** build against the libmxl the gateway runs ([#13](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/13)) ([dda3f4e](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/dda3f4e0618335f1c7dcb98ec0552b11871bf92e))
+
 ## [1.0.0-rc.4](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.3...v1.0.0-rc.4) (2026-08-04)
 
 
