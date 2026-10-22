@@ -15,6 +15,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <tuple>
 #include <string>
@@ -24,6 +25,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <nvnmos.h>
+#include "repeats.hpp"
 #include "senders.hpp"
 
 extern char** environ;
@@ -123,10 +125,54 @@ namespace
         return false;
     }
 
+    // NvNmos repeats a failure to find or reach a registry several times a
+    // second; each distinct line is printed at most once a minute, with a
+    // count of the ones held back since its last print, and a line that
+    // stops repeating gets its last count once it has been quiet a minute.
+    std::mutex logMutex;
+    repeats::Limiter logRepeats{60'000'000'000LL};
+
+    std::int64_t steadyNs()
+    {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
     void onLog(NvNmosNodeServer*, char const* categories, int level, char const* message)
     {
-        std::fprintf(stderr, "[mxl-writer-nmos] nmos[%d%s%s] %s\n", level, categories && *categories ? " " : "", categories ? categories : "",
-            message);
+        auto const* cats = categories ? categories : "";
+        auto line = "[mxl-writer-nmos] nmos[" + std::to_string(level) + (*cats ? " " : "") + cats + "] " + (message ? message : "");
+        auto heldBack = std::uint64_t{0};
+        {
+            auto const lock = std::lock_guard{logMutex};
+            if (!logRepeats.admit(line, steadyNs(), heldBack))
+            {
+                return;
+            }
+        }
+        if (heldBack > 0)
+        {
+            std::fprintf(stderr, "%s (%llu more like it since the last print)\n", line.c_str(), static_cast<unsigned long long>(heldBack));
+        }
+        else
+        {
+            std::fprintf(stderr, "%s\n", line.c_str());
+        }
+    }
+
+    // The last count of every line that stopped repeating.
+    void logStopped()
+    {
+        auto const now = steadyNs();
+        auto stopped = std::vector<repeats::Limiter::Summary>{};
+        {
+            auto const lock = std::lock_guard{logMutex};
+            stopped = logRepeats.stopped(now);
+        }
+        for (auto const& summary : stopped)
+        {
+            std::fprintf(stderr, "%s (%llu more like it since the last print, the last %lld s ago)\n", summary.line.c_str(),
+                static_cast<unsigned long long>(summary.heldBack), static_cast<long long>((now - summary.lastSeenNs) / 1'000'000'000LL));
+        }
     }
 
     bool spawn(Writer& writer)
@@ -424,6 +470,7 @@ int main(int argc, char** argv)
                 stop({writer.get()});
             }
         }
+        logStopped();
         std::this_thread::sleep_for(std::chrono::milliseconds{100});
     }
 

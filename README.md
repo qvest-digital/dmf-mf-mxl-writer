@@ -142,6 +142,13 @@ names them changes nothing, and any other value is refused with 400.
   deadline after which a process still running is killed. As the container's
   PID 1 it also reaps any process a writer leaves behind.
 
+NvNmos's log lines are passed through with each distinct line printed at most
+once a minute. Repeats in between are counted, and the count of those since the
+last print is printed with the next one; a line that stops repeating gets its
+last count, and how long ago it was last seen, once it has been quiet for a
+minute. A Node that finds no registry therefore says so once a minute rather
+than several times a second, and an outage that ends shows how long it lasted.
+
 The Connection API is unauthenticated, as IS-05 is: whoever reaches the Node's
 port can stop and start the flows.
 
@@ -163,7 +170,7 @@ docker build -t dmf-mf-mxl-writer:dev .
 
 The build runs `mxl-writer-status-tests` and `mxl-writer-nmos-tests` and fails
 with them. They cover `tools/mxl-writer-status/status.hpp`, the HTTP server in
-`server.hpp`, and `tools/mxl-writer-nmos/senders.hpp`.
+`server.hpp`, and `tools/mxl-writer-nmos/senders.hpp` and `repeats.hpp`.
 
 Override defaults with `--build-arg`:
 
