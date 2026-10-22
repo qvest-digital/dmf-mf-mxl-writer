@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.7](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.6...v1.0.0-rc.7) (2026-10-22)
+
+
+### Features
+
+* **status:** serve the writer's ring buffers on port 9102 ([#17](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/17)) ([a67b970](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/a67b970f951ec8091c01ba0bef2fecf046575f86))
+
 ## [1.0.0-rc.6](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.5...v1.0.0-rc.6) (2026-10-22)
 
 
