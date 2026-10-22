@@ -1,0 +1,242 @@
+From 6420cbe9fbf4041bb92747fa393688bd80aeda51 Mon Sep 17 00:00:00 2001
+From: Daniel Clasen <d.clasen@qvest-digital.com>
+Date: Thu, 22 Oct 2026 22:51:56 +0200
+Subject: [PATCH 8/9] feat(mxl-gst-testsrc): derive test content from the media
+ time
+
+videotestsrc draws its ball from its frame counter and audiotestsrc
+places its ticks by its sample counter, and both count from zero when
+the pipeline starts. The same grain index therefore carried different
+content in every process, and a video and an audio pipeline started
+apart drew a ball and a tick that had no fixed relation.
+
+Every source is now seeked, after it has negotiated and before the
+pipeline plays, to the TAI time of the first grain it will be committed
+at, so its counter is the MXL grain or sample index. The start point is
+the next grain on which the grain grid and the nanosecond grid meet, so
+the counter is exact at rates such as 30000/1001 too. audiotestsrc
+advances its counter past a buffer before filling it, so audio sources
+are seeked one buffer back.
+
+A live source rebases its buffers' timestamps to the clock's running
+time whatever position it was seeked to, so the segment its seek
+announces would put every buffer before its start and downstream would
+drop them. A probe announces the segment from zero instead, and a
+buffer is placed at the seeked media time plus its distance from the
+first buffer the source pushed, taken at the source pad. A sine's phase
+is an accumulator no seek reaches, and stays relative to the start.
+---
+ tools/mxl-gst/testsrc.cpp | 153 +++++++++++++++++++++++++++++++++++---
+ 1 file changed, 143 insertions(+), 10 deletions(-)
+
+diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
+index 1800771..ab8ea37 100644
+--- a/tools/mxl-gst/testsrc.cpp
++++ b/tools/mxl-gst/testsrc.cpp
+@@ -1,7 +1,9 @@
+ // SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
+ // SPDX-License-Identifier: Apache-2.0
+ 
++#include <atomic>
+ #include <csignal>
++#include <numeric>
+ #include <cstdint>
+ #include <cstdlib>
+ #include <cstring>
+@@ -238,20 +240,103 @@ namespace
+     class GstreamerPipeline
+     {
+     public:
+-        void start()
++        /// generatedAhead: how many grains or samples ahead of a buffer's own
++        /// position the source's counter already stands when it fills it.
++        void start(std::uint64_t generatedAhead = 0)
+         {
+             if (_pipeline == nullptr)
+             {
+                 throw std::runtime_error{"Attempt to start uninitialized pipeline."};
+             }
+ 
+-            // Start playing
++            // What a test source draws is a function of its own position:
++            // videotestsrc's ball and colour flip follow its frame counter,
++            // audiotestsrc's ticks its sample counter. Both count from 0 when
++            // the pipeline starts, so the same grain index carried different
++            // content in every process, and two pipelines started apart were
++            // out of phase. Seeking every source to the TAI time of the first
++            // grain it will be committed at makes its counter the MXL grain or
++            // sample index, so the content is a function of the media time:
++            // the same in every process, after every restart, for video and
++            // audio alike. A source reads its rate from its caps when it
++            // seeks, so the seek waits for negotiation, which a live source
++            // finishes in PAUSED before it waits for PLAYING.
++            //
++            // A live source rebases its buffers' timestamps to the clock's
++            // running time, whatever position it was seeked to, so the
++            // segment its seek announces would leave every buffer before its
++            // start and downstream would drop them all. The segment is
++            // announced from 0 instead, and pull() places a buffer at the
++            // seeked media time plus its distance from the first buffer a
++            // source pushed, taken at the source: an element downstream may
++            // drop the first ones.
++            ::gst_element_set_state(_pipeline, GST_STATE_PAUSED);
++            auto sources = std::vector<GstElement*>{};
++            if (auto* it = ::gst_bin_iterate_sources(GST_BIN(_pipeline)); it != nullptr)
++            {
++                auto item = GValue{};
++                while (::gst_iterator_next(it, &item) == GST_ITERATOR_OK)
++                {
++                    sources.push_back(GST_ELEMENT(::g_value_dup_object(&item)));
++                    ::g_value_reset(&item);
++                }
++                ::g_value_unset(&item);
++                ::gst_iterator_free(it);
++            }
++            for (auto* source : sources)
++            {
++                auto* pad = ::gst_element_get_static_pad(source, "src");
++                if (pad != nullptr)
++                {
++                    ::gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, &segmentFromZero, nullptr, nullptr);
++                    ::gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, &firstBuffer, this, nullptr);
++                }
++                auto caps = static_cast<GstCaps*>(nullptr);
++                for (auto i = 0; i < 5000 && pad != nullptr && (caps = ::gst_pad_get_current_caps(pad)) == nullptr; ++i)
++                {
++                    ::g_usleep(1000);
++                }
++                if (caps != nullptr)
++                {
++                    ::gst_caps_unref(caps);
++                }
++                if (pad != nullptr)
++                {
++                    ::gst_object_unref(pad);
++                }
++                if (caps == nullptr)
++                {
++                    throw std::runtime_error{"A test source did not negotiate within 5 s."};
++                }
++            }
++
++            // The next grain after now on which the grain grid and the
++            // nanosecond grid meet, so the counter a source derives from the
++            // time is exactly the grain index: 1 grain at N/1 rates, 3 at
++            // 30000/1001 or 48000 Hz. One more grain covers the seek.
++            auto const num = static_cast<std::uint64_t>(_grainRate.numerator);
++            auto const q = num / std::gcd(num, static_cast<std::uint64_t>(_grainRate.denominator) * 1'000'000'000ULL);
++            auto const index = ((mxlGetCurrentIndex(&_grainRate) + 2U + q - 1U) / q) * q;
++            _mxlBaseTime = mxlIndexToTimestamp(&_grainRate, index);
++            auto const seekTo = mxlIndexToTimestamp(&_grainRate, index - generatedAhead);
++            for (auto* source : sources)
++            {
++                auto const seeked = ::gst_element_seek(source,
++                    1.0,
++                    GST_FORMAT_TIME,
++                    static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE),
++                    GST_SEEK_TYPE_SET,
++                    seekTo,
++                    GST_SEEK_TYPE_NONE,
++                    GST_CLOCK_TIME_NONE);
++                ::gst_object_unref(source);
++                if (!seeked)
++                {
++                    throw std::runtime_error{"A test source refused to seek to the media time."};
++                }
++            }
+             ::gst_element_set_state(_pipeline, GST_STATE_PLAYING);
+-            // Here we want to align the gstreamer pipeline as close as possible
+-            // to an epoch grain. To achieve this, we set the base time to the
+-            // next grain timestamp.
+-            _mxlBaseTime = mxlIndexToTimestamp(&_grainRate, mxlGetCurrentIndex(&_grainRate) + 1U);
+-            MXL_INFO("Staring pipeline with base time: {} ns", _mxlBaseTime);
++            MXL_INFO("Starting pipeline at media time {} ns, index {}", _mxlBaseTime, index);
+         }
+ 
+         GstreamerSampleRef pull(std::uint64_t timeout) noexcept
+@@ -267,9 +352,12 @@ namespace
+                         ::gst_buffer_ref(buffer);
+                         result = GstreamerSampleRef{sample, buffer};
+ 
+-                        // Change the PTS to TAI time and include preroll delay
++                        // The sources were seeked to the media time of the
++                        // first buffer; every later one is as far from it as
++                        // its timestamp is from the first's.
+                         auto const bufferTs = GST_BUFFER_PTS(buffer);
+-                        GST_BUFFER_PTS(buffer) = _mxlBaseTime + bufferTs;
++                        auto const firstPts = _firstPts.load();
++                        GST_BUFFER_PTS(buffer) = _mxlBaseTime + (bufferTs >= firstPts ? bufferTs - firstPts : 0);
+                     }
+                     else
+                     {
+@@ -281,6 +369,47 @@ namespace
+         }
+ 
+     protected:
++        // Announces a seeked source's segment from 0, so the running-time
++        // timestamps a live source puts on its buffers fall inside it.
++        static GstPadProbeReturn segmentFromZero(GstPad*, GstPadProbeInfo* info, gpointer)
++        {
++            auto* event = GST_PAD_PROBE_INFO_EVENT(info);
++            if (GST_EVENT_TYPE(event) != GST_EVENT_SEGMENT)
++            {
++                return GST_PAD_PROBE_OK;
++            }
++            auto const* segment = static_cast<GstSegment const*>(nullptr);
++            ::gst_event_parse_segment(event, &segment);
++            if (segment->format != GST_FORMAT_TIME || segment->start == 0)
++            {
++                return GST_PAD_PROBE_OK;
++            }
++            auto rebased = GstSegment{};
++            ::gst_segment_copy_into(segment, &rebased);
++            rebased.start = 0;
++            rebased.time = 0;
++            rebased.position = 0;
++            auto* replacement = ::gst_event_new_segment(&rebased);
++            ::gst_event_set_seqnum(replacement, ::gst_event_get_seqnum(event));
++            ::gst_event_unref(event);
++            GST_PAD_PROBE_INFO_DATA(info) = replacement;
++            return GST_PAD_PROBE_OK;
++        }
++
++        // Keeps the earliest timestamp any source's first buffer carries: the
++        // running time at which the seeked media time was produced. Sources
++        // feeding one pipeline start within microseconds of each other.
++        static GstPadProbeReturn firstBuffer(GstPad*, GstPadProbeInfo* info, gpointer data)
++        {
++            auto* self = static_cast<GstreamerPipeline*>(data);
++            auto const pts = GST_BUFFER_PTS(GST_PAD_PROBE_INFO_BUFFER(info));
++            auto first = self->_firstPts.load();
++            while (GST_CLOCK_TIME_IS_VALID(pts) && pts < first && !self->_firstPts.compare_exchange_weak(first, pts))
++            {
++            }
++            return GST_PAD_PROBE_REMOVE;
++        }
++
+         GstreamerPipeline() noexcept
+             : _grainRate{}
+             , _pipeline{nullptr}
+@@ -361,6 +490,7 @@ namespace
+         GstElement* _pipeline;
+         GstElement* _appSink;
+         std::uint64_t _mxlBaseTime;
++        std::atomic<GstClockTime> _firstPts{GST_CLOCK_TIME_NONE};
+     };
+ 
+     class VideoPipeline : public GstreamerPipeline
+@@ -720,7 +850,10 @@ namespace
+                 throw std::domain_error{"Attempt to feed a non-audio MXL flow from a gstreamer audio pipeline."};
+             }
+ 
+-            gstPipeline.start();
++            // audiotestsrc moves its sample counter past a buffer before it
++            // fills it, so what it draws by that counter, the ticks, comes
++            // one buffer early unless the counter starts one buffer back.
++            gstPipeline.start(gstPipeline.config().samplesPerBatch);
+ 
+             auto const samplesPerBatch = gstPipeline.config().samplesPerBatch;
+ 
+-- 
+2.55.0
+
