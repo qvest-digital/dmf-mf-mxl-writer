@@ -1,0 +1,149 @@
+# NMOS conformance lane: an nmos-cpp registry, the writer as an NMOS Node,
+# mxl-writer-status reading the flows it writes, and the AMWA NMOS Testing
+# Tool, on one fixed-address network so the Node can be told the address it is
+# reached at. run.sh drives it.
+#
+# The MXL runtime root is a directory on the host's /dev/shm, which is tmpfs as
+# libmxl requires, holding the primary domain and a second one at domains/ID,
+# each with only the domain_def.json the platform would write. run.sh creates
+# it; a docker tmpfs volume would not do, because every container mounting one
+# gets a tmpfs of its own. The writer writes into the second domain, so its
+# Senders have to name that one.
+
+name: mxl-writer-nmos
+
+networks:
+  lane:
+    ipam:
+      config:
+        - subnet: 172.30.97.0/24
+
+services:
+  registry:
+    image: rhastie/nmos-cpp:master-079620d
+    networks:
+      lane:
+        ipv4_address: 172.30.97.10
+    configs:
+      - source: registry-container-config
+        target: /home/container-config
+      - source: registry-json
+        target: /config/registry.json
+
+  writer:
+    image: ${WRITER_IMAGE:-dmf-mf-mxl-writer:nmos-dev}
+    depends_on:
+      registry:
+        condition: service_started
+    networks:
+      lane:
+        ipv4_address: 172.30.97.20
+    volumes:
+      - ${MXL_ROOT:?run.sh creates the runtime root}:/run/mxl
+      - ${FLOW_CONFIG:?run.sh writes the flow definitions}:/etc/flow-config:ro
+    entrypoint: [/usr/bin/mxl-writer-nmos]
+    command:
+      - -d
+      - /run/mxl/domains/${SECOND_ID:?run.sh sets it}
+      - -v
+      - /etc/flow-config/video-flow.json
+      - -p
+      - ball
+      - -t
+      - LANE
+      - -a
+      - /etc/flow-config/audio-flow.json
+      - --audio-wave
+      - ticks
+      - --audio-freq
+      - 1000,1000
+      - -g
+      - lane
+    environment:
+      NMOS_HOST_ADDRESS: 172.30.97.20
+      NMOS_HTTP_PORT: "8080"
+      NMOS_SEED: mxl-writer-nmos-lane
+      NMOS_LABEL: lane
+      NMOS_REGISTRY_HOST: 172.30.97.10
+      NMOS_REGISTRY_PORT: "8010"
+
+  # Reads the headers of the flows the writer writes and says whether each is
+  # being written, as the chart's sidecar does.
+  status:
+    image: ${WRITER_IMAGE:-dmf-mf-mxl-writer:nmos-dev}
+    networks:
+      lane:
+        ipv4_address: 172.30.97.21
+    volumes:
+      - ${MXL_ROOT:?}:/run/mxl:ro
+    entrypoint:
+      - /usr/bin/mxl-writer-status
+      - -d
+      - /run/mxl/domains/${SECOND_ID:?}
+      - -f
+      - ${VIDEO_FLOW:?}
+      - -f
+      - ${AUDIO_FLOW:?}
+      - -p
+      - "9102"
+
+  # Where the ball and the ticks fall in the media second, read through
+  # libmxl as a consumer does; built in the image's build stage, where
+  # test/nmos/phase-probe.cpp is compiled against the same libmxl.
+  probe:
+    image: ${PROBE_IMAGE:-dmf-mf-mxl-writer:nmos-build}
+    profiles: [probe]
+    network_mode: none
+    environment:
+      LD_LIBRARY_PATH: /src/build/lib
+    volumes:
+      - ${MXL_ROOT:?}:/run/mxl:ro
+    entrypoint:
+      - /src/build/tools/mxl-writer-nmos/mxl-phase-probe
+      - /run/mxl/domains/${SECOND_ID:?}
+      - ${VIDEO_FLOW:?}
+      - ${AUDIO_FLOW:?}
+      - "5"
+
+  testing:
+    image: amwa/nmos-testing:master-9001851
+    profiles: [suite]
+    networks:
+      lane:
+        ipv4_address: 172.30.97.30
+    configs:
+      - source: testing-config
+        target: /config/UserConfig.py
+    # The suite arguments arrive as "$@" after the script, so compose run can
+    # pass them without replacing the script.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        python3 nmos-test.py "$$@" --output /tmp/report.xml
+        rc=$$?
+        echo "----- BEGIN JUNIT -----"
+        cat /tmp/report.xml 2>/dev/null || echo "(no report written)"
+        echo "----- END JUNIT -----"
+        exit $$rc
+      - sh
+
+configs:
+  registry-container-config:
+    content: |
+      registry_json=/config/registry.json
+      log_output=FALSE
+      update_label=FALSE
+      update_ptp_domain=FALSE
+      run_mqtt=FALSE
+  registry-json:
+    content: |
+      {"label":"lane","http_port":8010,"query_ws_port":8011,"logging_level":0,
+       "href_mode":2,"host_address":"172.30.97.10","host_addresses":["172.30.97.10"],
+       "seed_id":"5b0e7c1d-2a4f-5e83-9c61-d4a7b2e8f310"}
+  testing-config:
+    content: |
+      from . import Config as CONFIG
+      CONFIG.ENABLE_DNS_SD = False
+      CONFIG.QUERY_API_HOST = "172.30.97.10"
+      CONFIG.QUERY_API_PORT = 8010

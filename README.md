@@ -2,7 +2,7 @@
 
 Producer-side container image for the mxl-k8s demo pipeline.
 
-Bundles `mxl-gst-testsrc`, `mxl-info` and `mxl-writer-status`, built from
+Bundles `mxl-gst-testsrc`, `mxl-info`, `mxl-writer-status` and `mxl-writer-nmos`, built from
 the libmxl source of the `ghcr.io/qvest-digital/go-mxl-runtime` image it runs
 on, so the writer and the mxl-k8s gateway DaemonSet that reads its flows link
 the same libmxl. The entrypoint is `mxl-gst-testsrc`.
@@ -80,14 +80,90 @@ seconds against its media timestamp and the interval between commits.
 An id that is not a lowercase flow UUID exits with status 2; a port that
 cannot be bound exits with status 1.
 
+## NMOS
+
+`mxl-writer-nmos` runs the test source as an NMOS Node: it registers over IS-04
+and serves an IS-05 Connection API with one BCP-007-03 MXL Sender per flow,
+through NvNmos. It takes `mxl-gst-testsrc`'s own command line in place of the
+entrypoint, and its configuration from the environment:
+
+```
+mxl-writer-nmos -d <domain> [-v <video flow json> ...] [-a <audio flow json> ...] [-g <group>]
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `NMOS_HOST_ADDRESS` | *(required)* | Address the Node's APIs are reached at, which the registry hands to controllers. Also the Node's host name, so every advertised href resolves |
+| `NMOS_SEED` | *(required)* | Resource ids derive from it, so it must survive a restart and differ between instances |
+| `NMOS_HTTP_PORT` | *(library default)* | Port of the Node and Connection APIs |
+| `NMOS_REGISTRY_HOST` / `NMOS_REGISTRY_PORT` | *(unset -- DNS-SD)* | A fixed IS-04 Registration API, which disables discovery |
+| `NMOS_SYSTEM_HOST` / `NMOS_SYSTEM_PORT` | *(the registry's)* | A fixed IS-09 System API. nmos-cpp serves it beside the registry |
+| `NMOS_DNS_DOMAIN` | *(library default)* | DNS-SD domain to browse for a registry where none is fixed |
+| `NMOS_LABEL` / `NMOS_DESCRIPTION` | `MXL test writer` / `Test patterns written into MXL flows` | Node and Device label and description. A Sender is labelled `<label> video` or `<label> audio` |
+
+Only the `-x value` and `--name value` forms are taken. An option the test
+source does not take, an option without its value, a video option without
+`-v` or an audio option without `-a` exits with status 2, as does a flow id that
+is not a lowercase UUID or a missing `NMOS_HOST_ADDRESS` or `NMOS_SEED`.
+
+| Sender | Flow | Format |
+|---|---|---|
+| `video` | the `id` of the `-v` definition | its `media_type`, `video/v210` |
+| `audio` | the `id` of the `-a` definition | its `media_type`, `audio/float32` |
+
+Each Sender carries the group hint `<group>:Video` or `<group>:Audio`; the flow
+itself keeps the `<group>:video` or `<group>:audio` the test source writes into
+it. Its Flow and Source state the definition's format. The IS-04 Flow id derives from the seed and is not the MXL
+flow id, which IS-05 carries as `mxl_flow_id`. A Sender binds no interface, has
+no manifest, and its `/transportfile` answers 404.
+
+`mxl_domain_id` is the `id` in `<domain>/domain_def.json`, the file the
+platform writes into every MXL domain. A directory named as a UUID must carry
+that UUID in its file, or the Node does not start. Until the file is readable
+the Node is retried every 10 s; the flows do not wait for it.
+
+IS-05 constrains `mxl_flow_id` and `mxl_domain_id` to the one flow and the one
+domain each Sender writes, so `auto` resolves to them, an activation that
+names them changes nothing, and any other value is refused with 400.
+
+- Each flow is written by an `mxl-gst-testsrc` process of its own, running the
+  options that apply to that flow and the ones both share. What a flow carries
+  at a media time does not depend on when its process started (see
+  [Producer-pacing patches](#producer-pacing-patches)), so the two flows stay
+  in step across restarts and toggles.
+- Every Sender starts active.
+- An activation that clears `master_enable` stops that flow's process, which
+  releases the flow; the other flow is untouched. One that sets it starts the
+  process again. A deactivation is not persisted: after a restart every Sender
+  is active again.
+- A process that exits while its Sender is active stops the Node with status 1,
+  so the container restarts rather than advertise a flow nobody writes.
+- `SIGTERM` stops the Node and then every process, against one 10 s
+  deadline after which a process still running is killed. As the container's
+  PID 1 it also reaps any process a writer leaves behind.
+
+The Connection API is unauthenticated, as IS-05 is: whoever reaches the Node's
+port can stop and start the flows.
+
+`test/nmos/run.sh` runs the Node against a real nmos-cpp registry, reads the
+flows through `mxl-writer-status`, and checks what the Senders advertise, that
+each starts and stops its own write, that another flow or domain is refused,
+that a restart keeps the resource ids, and that a dead writer stops the Node.
+Then it runs the AMWA NMOS Testing Tool suites IS-04-01, IS-05-01, IS-05-02 and
+BCP-007-03-01. It also checks, through `test/nmos/phase-probe.cpp`, that the
+ball crosses the middle of the frame and the ticks start on whole TAI seconds
+with NMOS on, after a restart, after a Sender was stopped and started, and with
+NMOS off. It needs docker, curl and jq, and runs locally, not in CI.
+
 ## Build locally
 
 ```bash
 docker build -t dmf-mf-mxl-writer:dev .
 ```
 
-The build runs `mxl-writer-status-tests` and fails with them. They cover
-`tools/mxl-writer-status/status.hpp` and the HTTP server in `server.hpp`.
+The build runs `mxl-writer-status-tests` and `mxl-writer-nmos-tests` and fails
+with them. They cover `tools/mxl-writer-status/status.hpp`, the HTTP server in
+`server.hpp`, and `tools/mxl-writer-nmos/senders.hpp`.
 
 Override defaults with `--build-arg`:
 
@@ -117,8 +193,14 @@ Renovate rewrites `GO_MXL_TAG` only; its pull requests need `MXL_SRC` and
 
 The image builds `MXL_SRC` @ `MXL_REF` and then applies `patches/*.patch`
 on top. 0001-0005 fix producer pacing specific to this pipeline, 0006 adds
-the overlay-format setting and 0007 makes the audio tone describable. They
-touch `mxl-gst-testsrc` only and are not upstreamed.
+the overlay-format setting and 0007 makes the audio tone describable. 0008
+seeks every test source, before it plays, to the TAI time of the first grain or
+sample it is committed at, so the ball and the ticks are a function of the
+media time: the same in every process and after every restart. A sine's phase
+is not, since no seek reaches it. 0009 commits each audio batch at its own
+sample range, which libmxl takes by its exclusive end; before, audio landed
+one batch, 10 ms at 48 kHz, ahead of video. They touch `mxl-gst-testsrc` only
+and are not upstreamed.
 
 To bump the stock base:
 1. Set `MXL_SRC` and `MXL_REF` to what go-mxl's `.github/libmxl.version`
