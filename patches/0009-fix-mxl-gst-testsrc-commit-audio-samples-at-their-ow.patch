@@ -1,0 +1,46 @@
+From c8a9b66ea1bb0e76fdcab1b6694a1db279f0a877 Mon Sep 17 00:00:00 2001
+From: Daniel Clasen <d.clasen@qvest-digital.com>
+Date: Thu, 22 Oct 2026 23:32:33 +0200
+Subject: [PATCH 9/9] fix(mxl-gst-testsrc): commit audio samples at their own
+ range
+
+mxlFlowWriterOpenSamples takes the head index of the range, its end,
+exclusive, and the test source passed the index of the range's first
+sample. Every batch therefore landed one batch early: at 480 samples
+per batch, a 48 kHz flow carried its audio 10 ms ahead of the video
+written at the same media time. The silence written for skipped
+samples had the same offset.
+---
+ tools/mxl-gst/testsrc.cpp | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
+index cc115f4..8fd298d 100644
+--- a/tools/mxl-gst/testsrc.cpp
++++ b/tools/mxl-gst/testsrc.cpp
+@@ -907,8 +907,10 @@ namespace
+                             auto const nbSamplesBatch = std::min<std::uint64_t>(nbSamples, samplesPerBatch);
+                             auto const actualSampleIndex = sampleIndex - offset;
+ 
++                            // libmxl takes the end of the range, exclusive.
+                             mxlMutableWrappedMultiBufferSlice payloadBuffersSlices;
+-                            if (::mxlFlowWriterOpenSamples(_writer, actualSampleIndex, nbSamplesBatch, &payloadBuffersSlices) != MXL_STATUS_OK)
++                            if (::mxlFlowWriterOpenSamples(_writer, actualSampleIndex + nbSamplesBatch, nbSamplesBatch, &payloadBuffersSlices) !=
++                                MXL_STATUS_OK)
+                             {
+                                 MXL_ERROR("Failed to open samples at index '{}'", actualSampleIndex);
+                                 break;
+@@ -947,7 +949,9 @@ namespace
+                             auto const nbSamplesPerChan = mapInfo.size / (4 * _configInfo.continuous.channelCount);
+ 
+                             auto payloadBuffersSlices = ::mxlMutableWrappedMultiBufferSlice{};
+-                            if (::mxlFlowWriterOpenSamples(_writer, actualSampleIndex, nbSamplesPerChan, &payloadBuffersSlices) != MXL_STATUS_OK)
++                            // libmxl takes the end of the range, exclusive.
++                            if (::mxlFlowWriterOpenSamples(_writer, actualSampleIndex + nbSamplesPerChan, nbSamplesPerChan, &payloadBuffersSlices) !=
++                                MXL_STATUS_OK)
+                             {
+                                 MXL_ERROR("Failed to open samples at index '{}'", actualSampleIndex);
+                                 ::gst_buffer_unmap(pipelineSample.buffer(), &mapInfo);
+-- 
+2.55.0
+

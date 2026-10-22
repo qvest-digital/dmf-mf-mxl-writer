@@ -14,6 +14,18 @@ ARG GO_MXL_TAG=1.1.0-rc.7
 ARG MXL_SRC=https://github.com/qvest-digital/mxl.git
 ARG MXL_REF=c259243931333497e61faabeedac8048915dcb2b
 
+# NvNmos, NVIDIA's C API over nmos-cpp, provides the NMOS Node mxl-writer-nmos
+# runs: IS-04 registration, the IS-05 Connection API and BCP-007-03's MXL
+# transport. Its dependencies take the better part of an hour to compile, so it
+# is not built here: dmf-mf-mxl-compositor publishes it as an image tagged by
+# the NvNmos commit and the hash of the patches applied to it. Pinned by digest
+# as well, so a re-pushed tag cannot change the library under the build. libnvnmos.so links its own
+# dependencies statically and is built on the Debian release the go-mxl images
+# are; it does not link libmxl.
+ARG NVNMOS_IMAGE=ghcr.io/qvest-digital/dmf-mf-mxl-compositor/nvnmos:36fb7db9b5616a26f77164de735c15171e01aaed-738ca8fb@sha256:c8eedb07ad958279637226a4105ae07530116e1bb0de965ddf0d3ba68f64168d
+
+FROM ${NVNMOS_IMAGE} AS nvnmos
+
 # Stage 1: build mxl-gst-testsrc against the canonical libmxl
 FROM ghcr.io/qvest-digital/go-mxl-builder:${GO_MXL_TAG} AS build
 ARG MXL_REF
@@ -52,6 +64,16 @@ RUN cmake -S . -B build -DMXL_WRITER_STATUS_VERSION="${VERSION}" \
     && cmake --build build --target mxl-writer-status mxl-writer-status-tests -j \
     && build/tools/mxl-writer-status/mxl-writer-status-tests
 
+# mxl-writer-nmos, the NMOS Node that runs mxl-gst-testsrc once per flow, in
+# the same tree against NvNmos. The build runs its tests and fails with them.
+COPY --from=nvnmos /opt/nvnmos /opt/nvnmos
+COPY tools/mxl-writer-nmos/ /src/tools/mxl-writer-nmos/
+COPY test/nmos/phase-probe.cpp /src/tools/mxl-writer-nmos/
+RUN echo 'add_subdirectory(mxl-writer-nmos)' >> tools/CMakeLists.txt \
+    && cmake -S . -B build -DNVNMOS_ROOT=/opt/nvnmos \
+    && cmake --build build --target mxl-writer-nmos mxl-writer-nmos-tests mxl-phase-probe -j \
+    && build/tools/mxl-writer-nmos/mxl-writer-nmos-tests
+
 # Stage 2: runtime
 FROM ghcr.io/qvest-digital/go-mxl-runtime:${GO_MXL_TAG}
 
@@ -70,6 +92,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=build /src/build/tools/mxl-gst/mxl-gst-testsrc /usr/bin/mxl-gst-testsrc
 COPY --from=build /src/build/tools/mxl-info/mxl-info       /usr/bin/mxl-info
 COPY --from=build /src/build/tools/mxl-writer-status/mxl-writer-status /usr/bin/mxl-writer-status
+COPY --from=build /src/build/tools/mxl-writer-nmos/mxl-writer-nmos     /usr/bin/mxl-writer-nmos
+COPY --from=nvnmos /opt/nvnmos/lib/libnvnmos.so /usr/local/lib/
+RUN ldconfig
 
 # Flow definition template the producer script substitutes per-flow UUIDs
 # into before handing the rendered JSON to mxl-gst-testsrc -v. Path
