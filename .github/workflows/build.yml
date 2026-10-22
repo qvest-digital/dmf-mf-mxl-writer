@@ -55,6 +55,8 @@ jobs:
         with:
           context: .
           file: Dockerfile
+          build-args: |
+            VERSION=${{ steps.tags.outputs.version || steps.tags.outputs.sha }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
