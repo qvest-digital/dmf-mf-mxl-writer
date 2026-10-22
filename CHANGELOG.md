@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.9](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.8...v1.0.0-rc.9) (2026-10-22)
+
+
+### Bug Fixes
+
+* **nmos:** print a repeating NvNmos log line once a minute ([#21](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/21)) ([5453492](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/54534922325d31d18be4ffc03bef1711aa24fc5d))
+
 ## [1.0.0-rc.8](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.7...v1.0.0-rc.8) (2026-10-22)
 
 
