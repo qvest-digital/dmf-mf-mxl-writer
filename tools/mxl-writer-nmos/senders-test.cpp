@@ -231,6 +231,18 @@ namespace
             "after the minute it is printed again, with how many were held back");
         check(!limiter.admit("registry unreachable", 61 * Second, held), "and held back again for the next minute");
 
+        auto outage = repeats::Limiter{60 * Second};
+        outage.admit("unreachable", 0, held);
+        for (auto i = 1; i <= 120; ++i)
+        {
+            outage.admit("unreachable", i * Second / 4, held);
+        }
+        check(outage.stopped(60 * Second).empty(), "a line seen within the minute has no last count yet");
+        auto const last = outage.stopped(90 * Second);
+        check(last.size() == 1 && last[0].line == "unreachable" && last[0].heldBack == 120 && last[0].lastSeenNs == 30 * Second,
+            "a line quiet for a minute gets its last count, with when it was last seen");
+        check(outage.stopped(200 * Second).empty(), "and gets it once");
+
         auto bounded = repeats::Limiter{60 * Second};
         for (std::size_t i = 0; i < 10 * repeats::Limiter::MaxEntries; ++i)
         {
