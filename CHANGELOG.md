@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-rc.8](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.7...v1.0.0-rc.8) (2026-10-22)
+
+
+### Features
+
+* **nmos:** register the writer's flows as BCP-007-03 senders ([61e20b9](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/61e20b976ab2f5f3d29c2ac8ed8a9706dab89fb9))
+* **testsrc:** draw the ball and the ticks from the media time ([61e20b9](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/61e20b976ab2f5f3d29c2ac8ed8a9706dab89fb9))
+
+
+### Bug Fixes
+
+* **testsrc:** commit each audio batch at its own sample range ([61e20b9](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/61e20b976ab2f5f3d29c2ac8ed8a9706dab89fb9))
+
 ## [1.0.0-rc.7](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.6...v1.0.0-rc.7) (2026-10-22)
 
 
