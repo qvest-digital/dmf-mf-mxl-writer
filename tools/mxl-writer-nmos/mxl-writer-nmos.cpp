@@ -15,6 +15,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <tuple>
 #include <string>
@@ -24,6 +25,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <nvnmos.h>
+#include "repeats.hpp"
 #include "senders.hpp"
 
 extern char** environ;
@@ -123,10 +125,34 @@ namespace
         return false;
     }
 
+    // NvNmos repeats a failure to find or reach a registry several times a
+    // second; each distinct line is printed at most once a minute, with a
+    // count of the ones held back.
+    std::mutex logMutex;
+    repeats::Limiter logRepeats{60'000'000'000LL};
+
     void onLog(NvNmosNodeServer*, char const* categories, int level, char const* message)
     {
-        std::fprintf(stderr, "[mxl-writer-nmos] nmos[%d%s%s] %s\n", level, categories && *categories ? " " : "", categories ? categories : "",
-            message);
+        auto const* cats = categories ? categories : "";
+        auto const* text = message ? message : "";
+        auto heldBack = std::uint64_t{0};
+        {
+            auto const lock = std::lock_guard{logMutex};
+            auto const now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (!logRepeats.admit(std::to_string(level) + "|" + cats + "|" + text, now, heldBack))
+            {
+                return;
+            }
+        }
+        if (heldBack > 0)
+        {
+            std::fprintf(stderr, "[mxl-writer-nmos] nmos[%d%s%s] %s (%llu more like it in the last minute)\n", level, *cats ? " " : "", cats, text,
+                static_cast<unsigned long long>(heldBack));
+        }
+        else
+        {
+            std::fprintf(stderr, "[mxl-writer-nmos] nmos[%d%s%s] %s\n", level, *cats ? " " : "", cats, text);
+        }
     }
 
     bool spawn(Writer& writer)

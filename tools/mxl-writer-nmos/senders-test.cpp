@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <unistd.h>
+#include "repeats.hpp"
 #include "senders.hpp"
 
 namespace
@@ -211,8 +212,37 @@ namespace
     }
 }
 
+namespace
+{
+    void repeating()
+    {
+        constexpr std::int64_t Second = 1'000'000'000LL;
+        auto limiter = repeats::Limiter{60 * Second};
+        auto held = std::uint64_t{0};
+        check(limiter.admit("registry unreachable", 0, held) && held == 0, "a line is printed the first time");
+        auto printed = 0;
+        for (auto i = 1; i <= 239; ++i)
+        {
+            printed += limiter.admit("registry unreachable", i * Second / 4, held) ? 1 : 0;
+        }
+        check(printed == 0, "the same line four times a second is held back for the minute");
+        check(limiter.admit("node up", Second, held) && held == 0, "another line is printed meanwhile");
+        check(limiter.admit("registry unreachable", 60 * Second, held) && held == 239,
+            "after the minute it is printed again, with how many were held back");
+        check(!limiter.admit("registry unreachable", 61 * Second, held), "and held back again for the next minute");
+
+        auto bounded = repeats::Limiter{60 * Second};
+        for (std::size_t i = 0; i < 10 * repeats::Limiter::MaxEntries; ++i)
+        {
+            bounded.admit("line " + std::to_string(i), 0, held);
+        }
+        check(bounded.admit("line 0", Second, held), "a table full of lines that never repeat is forgotten, not grown");
+    }
+}
+
 int main()
 {
+    repeating();
     splitting();
     uuids();
     domains();
