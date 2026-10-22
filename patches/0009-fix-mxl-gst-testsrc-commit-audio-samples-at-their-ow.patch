@@ -1,4 +1,4 @@
-From 5adb6b0d11ebac4987e7e90422ab8ad7aabb52ac Mon Sep 17 00:00:00 2001
+From c8a9b66ea1bb0e76fdcab1b6694a1db279f0a877 Mon Sep 17 00:00:00 2001
 From: Daniel Clasen <d.clasen@qvest-digital.com>
 Date: Thu, 22 Oct 2026 23:32:33 +0200
 Subject: [PATCH 9/9] fix(mxl-gst-testsrc): commit audio samples at their own
@@ -15,10 +15,10 @@ samples had the same offset.
  1 file changed, 6 insertions(+), 2 deletions(-)
 
 diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
-index ab8ea37..b079cd5 100644
+index cc115f4..8fd298d 100644
 --- a/tools/mxl-gst/testsrc.cpp
 +++ b/tools/mxl-gst/testsrc.cpp
-@@ -901,8 +901,10 @@ namespace
+@@ -907,8 +907,10 @@ namespace
                              auto const nbSamplesBatch = std::min<std::uint64_t>(nbSamples, samplesPerBatch);
                              auto const actualSampleIndex = sampleIndex - offset;
  
@@ -30,7 +30,7 @@ index ab8ea37..b079cd5 100644
                              {
                                  MXL_ERROR("Failed to open samples at index '{}'", actualSampleIndex);
                                  break;
-@@ -941,7 +943,9 @@ namespace
+@@ -947,7 +949,9 @@ namespace
                              auto const nbSamplesPerChan = mapInfo.size / (4 * _configInfo.continuous.channelCount);
  
                              auto payloadBuffersSlices = ::mxlMutableWrappedMultiBufferSlice{};

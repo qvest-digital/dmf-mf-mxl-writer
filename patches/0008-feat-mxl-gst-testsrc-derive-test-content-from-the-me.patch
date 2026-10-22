@@ -1,4 +1,4 @@
-From 6420cbe9fbf4041bb92747fa393688bd80aeda51 Mon Sep 17 00:00:00 2001
+From a35cc6e2442fd38f2beab24ddc19121ac5fd6735 Mon Sep 17 00:00:00 2001
 From: Daniel Clasen <d.clasen@qvest-digital.com>
 Date: Thu, 22 Oct 2026 22:51:56 +0200
 Subject: [PATCH 8/9] feat(mxl-gst-testsrc): derive test content from the media
@@ -16,7 +16,8 @@ at, so its counter is the MXL grain or sample index. The start point is
 the next grain on which the grain grid and the nanosecond grid meet, so
 the counter is exact at rates such as 30000/1001 too. audiotestsrc
 advances its counter past a buffer before filling it, so audio sources
-are seeked one buffer back.
+are seeked one buffer back, to a time rounded up so the floor a
+source applies lands on that sample.
 
 A live source rebases its buffers' timestamps to the clock's running
 time whatever position it was seeked to, so the segment its seek
@@ -26,11 +27,11 @@ buffer is placed at the seeked media time plus its distance from the
 first buffer the source pushed, taken at the source pad. A sine's phase
 is an accumulator no seek reaches, and stays relative to the start.
 ---
- tools/mxl-gst/testsrc.cpp | 153 +++++++++++++++++++++++++++++++++++---
- 1 file changed, 143 insertions(+), 10 deletions(-)
+ tools/mxl-gst/testsrc.cpp | 159 +++++++++++++++++++++++++++++++++++---
+ 1 file changed, 149 insertions(+), 10 deletions(-)
 
 diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
-index 1800771..ab8ea37 100644
+index 1800771..cc115f4 100644
 --- a/tools/mxl-gst/testsrc.cpp
 +++ b/tools/mxl-gst/testsrc.cpp
 @@ -1,7 +1,9 @@
@@ -43,7 +44,7 @@ index 1800771..ab8ea37 100644
  #include <cstdint>
  #include <cstdlib>
  #include <cstring>
-@@ -238,20 +240,103 @@ namespace
+@@ -238,20 +240,109 @@ namespace
      class GstreamerPipeline
      {
      public:
@@ -127,7 +128,13 @@ index 1800771..ab8ea37 100644
 +            auto const q = num / std::gcd(num, static_cast<std::uint64_t>(_grainRate.denominator) * 1'000'000'000ULL);
 +            auto const index = ((mxlGetCurrentIndex(&_grainRate) + 2U + q - 1U) / q) * q;
 +            _mxlBaseTime = mxlIndexToTimestamp(&_grainRate, index);
-+            auto const seekTo = mxlIndexToTimestamp(&_grainRate, index - generatedAhead);
++            // Rounded up rather than to nearest: a source floors the time
++            // back to its counter, so a time off the nanosecond grid would
++            // start it one sample early.
++            auto const seekTo = static_cast<std::uint64_t>(
++                (static_cast<unsigned __int128>(index - generatedAhead) * static_cast<std::uint64_t>(_grainRate.denominator) * 1'000'000'000ULL +
++                    num - 1U) /
++                num);
 +            for (auto* source : sources)
 +            {
 +                auto const seeked = ::gst_element_seek(source,
@@ -154,7 +161,7 @@ index 1800771..ab8ea37 100644
          }
  
          GstreamerSampleRef pull(std::uint64_t timeout) noexcept
-@@ -267,9 +352,12 @@ namespace
+@@ -267,9 +358,12 @@ namespace
                          ::gst_buffer_ref(buffer);
                          result = GstreamerSampleRef{sample, buffer};
  
@@ -169,7 +176,7 @@ index 1800771..ab8ea37 100644
                      }
                      else
                      {
-@@ -281,6 +369,47 @@ namespace
+@@ -281,6 +375,47 @@ namespace
          }
  
      protected:
@@ -217,7 +224,7 @@ index 1800771..ab8ea37 100644
          GstreamerPipeline() noexcept
              : _grainRate{}
              , _pipeline{nullptr}
-@@ -361,6 +490,7 @@ namespace
+@@ -361,6 +496,7 @@ namespace
          GstElement* _pipeline;
          GstElement* _appSink;
          std::uint64_t _mxlBaseTime;
@@ -225,7 +232,7 @@ index 1800771..ab8ea37 100644
      };
  
      class VideoPipeline : public GstreamerPipeline
-@@ -720,7 +850,10 @@ namespace
+@@ -720,7 +856,10 @@ namespace
                  throw std::domain_error{"Attempt to feed a non-audio MXL flow from a gstreamer audio pipeline."};
              }
  
