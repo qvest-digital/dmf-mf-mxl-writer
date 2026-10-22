@@ -39,6 +39,19 @@ RUN cmake -S . -B build \
         -DCMAKE_TOOLCHAIN_FILE=/root/vcpkg/scripts/buildsystems/vcpkg.cmake \
     && cmake --build build --target mxl-gst-testsrc mxl-info -j
 
+# mxl-writer-status, which serves the ring state of the writer's flows, builds
+# in the same tree against the same libmxl target. It comes after the other
+# tools, so a change to it, or to the version it reports, leaves their layers
+# cached; cmake then rebuilds only its own targets. The build runs its tests
+# and fails with them.
+COPY tools/mxl-writer-status/ /src/tools/mxl-writer-status/
+RUN echo 'add_subdirectory(mxl-writer-status)' >> tools/CMakeLists.txt
+# What the tool reports as its version: the release, or the commit.
+ARG VERSION=dev
+RUN cmake -S . -B build -DMXL_WRITER_STATUS_VERSION="${VERSION}" \
+    && cmake --build build --target mxl-writer-status mxl-writer-status-tests -j \
+    && build/tools/mxl-writer-status/mxl-writer-status-tests
+
 # Stage 2: runtime
 FROM ghcr.io/qvest-digital/go-mxl-runtime:${GO_MXL_TAG}
 
@@ -56,6 +69,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=build /src/build/tools/mxl-gst/mxl-gst-testsrc /usr/bin/mxl-gst-testsrc
 COPY --from=build /src/build/tools/mxl-info/mxl-info       /usr/bin/mxl-info
+COPY --from=build /src/build/tools/mxl-writer-status/mxl-writer-status /usr/bin/mxl-writer-status
 
 # Flow definition template the producer script substitutes per-flow UUIDs
 # into before handing the rendered JSON to mxl-gst-testsrc -v. Path

@@ -2,10 +2,10 @@
 
 Producer-side container image for the mxl-k8s demo pipeline.
 
-Bundles `mxl-gst-testsrc` + `mxl-info`, built from the libmxl source of
-the `ghcr.io/qvest-digital/go-mxl-runtime` image it runs on, so the writer
-and the mxl-k8s gateway DaemonSet that reads its flows link the same
-libmxl.
+Bundles `mxl-gst-testsrc`, `mxl-info` and `mxl-writer-status`, built from
+the libmxl source of the `ghcr.io/qvest-digital/go-mxl-runtime` image it runs
+on, so the writer and the mxl-k8s gateway DaemonSet that reads its flows link
+the same libmxl. The entrypoint is `mxl-gst-testsrc`.
 
 ## Image
 
@@ -17,11 +17,77 @@ Tags follow `<git-sha>` (every build), `latest` (main only), and `<version>` on 
 rename. It keeps the tags it already holds and receives no further build; it can
 go once nothing resolves it.
 
+## Ring status
+
+`mxl-writer-status` serves the ring buffers of the flows the writer produces,
+from the same image with the command overridden:
+
+```
+mxl-writer-status -d <domain> -f <flow-id> [-f <flow-id> ...] [-p 9102]
+```
+
+It opens each flow with a libmxl flow reader and reads only the flow's config
+and runtime info, never a grain or a sample. The reader maps the flow's data
+read-only. For video, data and event flows it also opens the flow's `access`
+file read-write, which libmxl touches only when a grain is read, so the
+`lastReadTime` it derives from that file keeps reporting real consumers. On a
+read-only mount that open fails, which libmxl ignores. The tool reads the
+domain directly and needs no intent shim (`LD_PRELOAD`). A domain or flow that
+is not there yet is retried every second, and a flow removed or created anew
+under it, before or after its first commit, is opened again within a second.
+
+The header is read every 2 ms. Every change of head index or write time counts
+as a commit. A grain commit is timed by the write time the flow records rather
+than by when the change was seen, so video and data rates and intervals are on
+the flow's own clock. libmxl's continuous writer moves the head without
+stamping a write time, so a sample commit is timed by the read that saw it,
+within those 2 ms.
+
+| path | answers |
+| --- | --- |
+| `/` | the ring view, a page drawing each flow's ring and commit timing from `/stream` |
+| `/stream` | server-sent events, 20 batches a second: per flow its ring length, slot payload, period, span of one commit, a reader's grace, head and media-clock index, and every commit since the last batch as `[head, write ms, ms after media time, step, kind]`; at most 8 at once |
+| `/status` | JSON, one object per flow: state, label, declared format, ring length, payload and duration, batch hints, head, head against the media clock, head rate, write age, read age for grains and events, counters, last error |
+| `/metrics` | Prometheus text, `mxl_writer_status_*` |
+| `/healthz` | 200 while the process serves |
+
+One thread serves every connection. A request is answered once its header is
+complete; a header still incomplete after 5 s is dropped, one over 8 KiB gets
+431, a malformed one 400 and any method but `GET` 405. A client that connects
+and sends nothing does not delay anybody else's request.
+
+The ring view draws a slot per grain, or per sample span for audio, coloured by
+when it was committed against its media timestamp: ahead of it, within one
+grain or one commit batch of samples, within the grace a reader at the head
+allows (the rule `mxl-reader` applies), or later. Grains the head moved past
+without writing get a colour of their own. Markers
+show the head and the current media-clock index. Below it: the number of
+slots, the payload of one slot (a grain of every plane, or one float sample of
+every channel; a data grain has no fixed size), the payload of the whole ring,
+and the media time it holds. Two strips plot each commit of the last six
+seconds against its media timestamp and the interval between commits.
+
+| metric | |
+| --- | --- |
+| `mxl_writer_status_flow_info{media_type,unit}`, `_flow_state{state}`, `_flow_writing` | what the flow is, where its watch stands (`starting`, `domain_unavailable`, `flow_not_found`, `permission_denied`, `flow_error`, `open`), and whether a commit landed within the last second |
+| `mxl_writer_status_ring_length`, `_ring_seconds`, `_ring_bytes` | the ring, in the flow's unit, in media time, in payload bytes |
+| `mxl_writer_status_head_index`, `_head_rate`, `_nominal_rate` | the head, how fast it advanced over the last second of commits, and the declared rate |
+| `mxl_writer_status_head_lead_seconds` | head index minus the current media-clock index; negative is behind the clock |
+| `mxl_writer_status_write_age_seconds` | wall clock minus the last commit |
+| `mxl_writer_status_read_age_seconds` | wall clock minus the flow's last read time, for grains and events only. libmxl sets it to the creation time until a consumer reads, and a sample read never moves it, so audio flows have none |
+| `mxl_writer_status_commits_total`, `_skipped_total`, `_backward_steps_total`, `_stalls_total`, `_opens_total`, `_lost_total` | commits seen, grains the head moved past unwritten, backward steps of the head, timeouts without a commit, opens, and flows removed or replaced while open |
+
+An id that is not a lowercase flow UUID exits with status 2; a port that
+cannot be bound exits with status 1.
+
 ## Build locally
 
 ```bash
 docker build -t dmf-mf-mxl-writer:dev .
 ```
+
+The build runs `mxl-writer-status-tests` and fails with them. They cover
+`tools/mxl-writer-status/status.hpp` and the HTTP server in `server.hpp`.
 
 Override defaults with `--build-arg`:
 
@@ -30,6 +96,7 @@ docker build \
   --build-arg GO_MXL_TAG=<tag> \
   --build-arg MXL_SRC=<repository URL> \
   --build-arg MXL_REF=<commit> \
+  --build-arg VERSION=<what mxl-writer-status reports> \
   -t dmf-mf-mxl-writer:dev .
 ```
 
