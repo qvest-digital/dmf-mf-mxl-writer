@@ -7,12 +7,12 @@
 # policy and the patch series applied on top.
 
 # renovate: datasource=docker depName=ghcr.io/qvest-digital/go-mxl-builder
-ARG GO_MXL_TAG=1.1.0-rc.6
+ARG GO_MXL_TAG=1.1.0-rc.7
 
 # MXL_SRC and MXL_REF are the repository and commit named in go-mxl's
 # .github/libmxl.version at GO_MXL_TAG.
 ARG MXL_SRC=https://github.com/qvest-digital/mxl.git
-ARG MXL_REF=27b24a17507929873d8da527e9e5517dc1b250ad
+ARG MXL_REF=c259243931333497e61faabeedac8048915dcb2b
 
 # Stage 1: build mxl-gst-testsrc against the canonical libmxl
 FROM ghcr.io/qvest-digital/go-mxl-builder:${GO_MXL_TAG} AS build
