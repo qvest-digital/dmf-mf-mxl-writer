@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.10](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.9...v1.0.0-rc.10) (2026-10-23)
+
+
+### Bug Fixes
+
+* **testsrc:** realign the video source once it keeps up again ([8f2fb98](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/8f2fb981366e3c0a100190e5e2179d4d3ccb8624))
+
 ## [1.0.0-rc.9](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.8...v1.0.0-rc.9) (2026-10-22)
 
 
