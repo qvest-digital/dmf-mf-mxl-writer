@@ -31,7 +31,7 @@ namespace
     constexpr std::uint64_t Ms = 1'000'000ULL;
 
     // The shape the mxl-writer chart renders for its video flow.
-    constexpr char const* Video = R"({"id": "d4d00000-0000-0000-0000-100000000000", "label": "Video output",
+    constexpr char const* Video = R"({"id": "d4d00000-0000-4000-8000-100000000000", "label": "Video output",
         "tags": {"urn:x-nmos:tag:grouphint/v1.0": ["mxl-multiviewer-1:Video"]}, "media_type": "video/v210",
         "grain_rate": {"numerator": 50, "denominator": 1}, "frame_width": 1920, "frame_height": 1080,
         "interlace_mode": "progressive"})";
@@ -195,7 +195,7 @@ namespace
     status::FlowView openVideo(std::uint64_t head, std::uint64_t writeNs)
     {
         auto view = status::FlowView{};
-        view.id = "d4d00000-0000-0000-0000-100000000000";
+        view.id = "d4d00000-0000-4000-8000-100000000000";
         view.state = "open";
         view.open = true;
         view.unit = "grains";
@@ -408,7 +408,7 @@ namespace
         auto const now = mediaTime(rate, head - 3) + Ms;
         auto video = openVideo(head, now - 4 * Ms);
         auto waiting = status::FlowView{};
-        waiting.id = "d4d00000-0000-0000-0000-100000000001";
+        waiting.id = "d4d00000-0000-4000-8000-100000000001";
         waiting.state = "flow_not_found";
         waiting.lastError = "flow not found in the domain";
         waiting.lastErrorAt = now - 3 * status::NsPerSecond;
@@ -427,7 +427,7 @@ namespace
 
         auto audio = openVideo(head, now - 4 * Ms);
         audio.unit = "samples";
-        audio.id = "d4d00000-0000-0000-0000-100000000002";
+        audio.id = "d4d00000-0000-4000-8000-100000000002";
         auto const audioText = status::statusJson("v", {audio}, now);
         auto const a = flowJson(audioText, 0);
         check(!a.empty() && a.find("readAgeSeconds") == a.end(), "samples carry no read age: libmxl keeps none for them");
@@ -442,16 +442,16 @@ namespace
         check(!flowJson(stale, 0).at("writing").get<bool>(), "a flow last written two seconds ago is not writing");
 
         auto const metrics = status::metricsText({video, waiting}, now);
-        check(metrics.find("mxl_writer_status_head_lead_seconds{flow=\"d4d00000-0000-0000-0000-100000000000\"} 0.060000\n") != std::string::npos,
+        check(metrics.find("mxl_writer_status_head_lead_seconds{flow=\"d4d00000-0000-4000-8000-100000000000\"} 0.060000\n") != std::string::npos,
             "the lead is a metric, in seconds");
-        check(metrics.find("mxl_writer_status_head_rate{flow=\"d4d00000-0000-0000-0000-100000000000\"} 50.000000\n") != std::string::npos,
+        check(metrics.find("mxl_writer_status_head_rate{flow=\"d4d00000-0000-4000-8000-100000000000\"} 50.000000\n") != std::string::npos,
             "the head rate is a metric");
-        check(metrics.find("mxl_writer_status_flow_state{flow=\"d4d00000-0000-0000-0000-100000000001\",state=\"flow_not_found\"} 1\n") !=
+        check(metrics.find("mxl_writer_status_flow_state{flow=\"d4d00000-0000-4000-8000-100000000001\",state=\"flow_not_found\"} 1\n") !=
                   std::string::npos,
             "every flow reports its state");
-        check(metrics.find("mxl_writer_status_head_index{flow=\"d4d00000-0000-0000-0000-100000000001\"}") == std::string::npos,
+        check(metrics.find("mxl_writer_status_head_index{flow=\"d4d00000-0000-4000-8000-100000000001\"}") == std::string::npos,
             "a flow not found has no head index metric");
-        check(metrics.find("mxl_writer_status_commits_total{flow=\"d4d00000-0000-0000-0000-100000000001\"} 0\n") != std::string::npos,
+        check(metrics.find("mxl_writer_status_commits_total{flow=\"d4d00000-0000-4000-8000-100000000001\"} 0\n") != std::string::npos,
             "counters exist from the start");
         check(status::labelValue("a\"b\\c\nd") == "a_b_c_d", "quotes, backslashes and newlines cannot break a label");
     }
