@@ -103,7 +103,7 @@ services:
       - /run/mxl/domains/${SECOND_ID:?}
       - ${VIDEO_FLOW:?}
       - ${AUDIO_FLOW:?}
-      - "5"
+      - "9"
 
   testing:
     image: amwa/nmos-testing:master-9001851

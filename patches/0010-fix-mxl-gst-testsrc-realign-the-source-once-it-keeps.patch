@@ -1,0 +1,351 @@
+From 9fd17a89f8b7e373ee00742c3bddc0dd33445d0f Mon Sep 17 00:00:00 2001
+From: Daniel Clasen <d.clasen@qvest-digital.com>
+Date: Fri, 23 Oct 2026 03:10:48 +0200
+Subject: [PATCH] fix(mxl-gst-testsrc): realign the source once it keeps up
+ again
+
+When the video thread cannot keep real time, its frames are drawn for a
+media time further and further behind the clock, and once that is more
+than 30 grains the pull loop writes each frame at the clock instead.
+The index then follows the clock but the source's counter does not, so
+the ball, and anything else drawn from the counter, stayed that far
+behind the media time for as long as the process ran, out of step with
+an audio flow that kept up, even after the thread had caught up.
+
+Frames are still written late, every one of them, while the thread is
+too slow. Once the lag has stopped growing for 2 s, the video pipeline
+starts once more at the next grain's media time, as it does at
+startup, so its content is the media time's again; at most once per
+10 s. A live source seeked while it plays would instead wait on the
+clock for as long as the seek moved it.
+
+A start that cannot put the source on the media time, a source that
+does not negotiate or refuses the seek, leaves the pipeline playing
+with its frames written at the clock and is tried again after 10 s.
+A restarted pipeline that produces nothing for 5 s, and any other error
+that ends a flow's thread, now ends the process with status 1 rather
+than leaving the other flow's thread holding it up.
+MXL_TESTSRC_REFUSE_REALIGN makes the seek count as refused, for tests.
+---
+ tools/mxl-gst/testsrc.cpp | 189 +++++++++++++++++++++++++++++++++-----
+ 1 file changed, 165 insertions(+), 24 deletions(-)
+
+diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
+index 8fd298d..61a907d 100644
+--- a/tools/mxl-gst/testsrc.cpp
++++ b/tools/mxl-gst/testsrc.cpp
+@@ -2,6 +2,7 @@
+ // SPDX-License-Identifier: Apache-2.0
+ 
+ #include <atomic>
++#include <chrono>
+ #include <csignal>
+ #include <numeric>
+ #include <cstdint>
+@@ -27,7 +28,21 @@
+ 
+ namespace
+ {
+-    auto volatile g_exit_requested = std::sig_atomic_t{0};
++    // Written by the signal handler and by a flow thread that failed, read by
++    // both flow threads; a lock-free atomic is safe in a signal handler.
++    auto g_exit_requested = std::atomic<int>{0};
++    static_assert(std::atomic<int>::is_always_lock_free);
++
++    // Set when a flow's thread ended on an error. The other flow's thread is
++    // stopped too and the process exits non-zero, so a flow that stopped
++    // being written does not leave a process that looks healthy.
++    auto g_failed = std::atomic<bool>{false};
++
++    void fail_flow() noexcept
++    {
++        g_failed = true;
++        g_exit_requested = 1;
++    }
+ 
+     void signal_handler(int) noexcept
+     {
+@@ -242,7 +257,11 @@ namespace
+     public:
+         /// generatedAhead: how many grains or samples ahead of a buffer's own
+         /// position the source's counter already stands when it fills it.
+-        void start(std::uint64_t generatedAhead = 0)
++        /// Returns whether the sources were put on the media time. Where they
++        /// could not be -- a source that did not negotiate or refused the
++        /// seek -- mustAlign throws; otherwise the pipeline plays anyway with
++        /// its sources where they are, and false is returned.
++        bool start(std::uint64_t generatedAhead = 0, bool mustAlign = true, bool refuseSeek = false)
+         {
+             if (_pipeline == nullptr)
+             {
+@@ -283,12 +302,17 @@ namespace
+                 ::g_value_unset(&item);
+                 ::gst_iterator_free(it);
+             }
++            _sources = sources;
++            auto aligned = true;
+             for (auto* source : sources)
+             {
+                 auto* pad = ::gst_element_get_static_pad(source, "src");
+-                if (pad != nullptr)
++                if (pad != nullptr && !_probed)
+                 {
+                     ::gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, &segmentFromZero, nullptr, nullptr);
++                }
++                if (pad != nullptr)
++                {
+                     ::gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, &firstBuffer, this, nullptr);
+                 }
+                 auto caps = static_cast<GstCaps*>(nullptr);
+@@ -306,7 +330,12 @@ namespace
+                 }
+                 if (caps == nullptr)
+                 {
+-                    throw std::runtime_error{"A test source did not negotiate within 5 s."};
++                    if (mustAlign)
++                    {
++                        throw std::runtime_error{"A test source did not negotiate within 5 s."};
++                    }
++                    MXL_ERROR("A test source did not negotiate within 5 s, so it cannot be put on the media time.");
++                    aligned = false;
+                 }
+             }
+ 
+@@ -321,28 +350,39 @@ namespace
+             // Rounded up rather than to nearest: a source floors the time
+             // back to its counter, so a time off the nanosecond grid would
+             // start it one sample early.
+-            auto const seekTo = static_cast<std::uint64_t>(
+-                (static_cast<unsigned __int128>(index - generatedAhead) * static_cast<std::uint64_t>(_grainRate.denominator) * 1'000'000'000ULL +
+-                    num - 1U) /
+-                num);
+-            for (auto* source : sources)
++            _probed = true;
++            if (aligned && (refuseSeek || !seekSources(index - generatedAhead)))
+             {
+-                auto const seeked = ::gst_element_seek(source,
+-                    1.0,
+-                    GST_FORMAT_TIME,
+-                    static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE),
+-                    GST_SEEK_TYPE_SET,
+-                    seekTo,
+-                    GST_SEEK_TYPE_NONE,
+-                    GST_CLOCK_TIME_NONE);
+-                ::gst_object_unref(source);
+-                if (!seeked)
++                if (mustAlign)
+                 {
+                     throw std::runtime_error{"A test source refused to seek to the media time."};
+                 }
++                MXL_ERROR("A test source refused to seek to the media time.");
++                aligned = false;
+             }
+             ::gst_element_set_state(_pipeline, GST_STATE_PLAYING);
+             MXL_INFO("Starting pipeline at media time {} ns, index {}", _mxlBaseTime, index);
++            return aligned;
++        }
++
++        /// Starts the pipeline again at the next grain's media time, as
++        /// start() does. A live source seeked while it plays waits on the
++        /// clock for as long as the seek moved it, so it is stopped first.
++        /// Returns whether the sources are on the media time; where they are
++        /// not, the pipeline plays anyway, its frames written at the clock
++        /// as before. MXL_TESTSRC_REFUSE_REALIGN set makes the seek count as
++        /// refused, which the conformance lane uses.
++        bool restart(std::uint64_t generatedAhead = 0)
++        {
++            ::gst_element_set_state(_pipeline, GST_STATE_NULL);
++            for (auto* source : _sources)
++            {
++                ::gst_object_unref(source);
++            }
++            _sources.clear();
++            _firstPts = GST_CLOCK_TIME_NONE;
++            auto const* refuse = std::getenv("MXL_TESTSRC_REFUSE_REALIGN");
++            return start(generatedAhead, false, refuse != nullptr && *refuse != '\0');
+         }
+ 
+         GstreamerSampleRef pull(std::uint64_t timeout) noexcept
+@@ -375,6 +415,30 @@ namespace
+         }
+ 
+     protected:
++        // Seeks every source to the TAI time of index, rounded up rather
++        // than to nearest: a source floors the time back to its counter, so
++        // a time off the nanosecond grid would leave it one short.
++        bool seekSources(std::uint64_t index)
++        {
++            auto const num = static_cast<std::uint64_t>(_grainRate.numerator);
++            auto const seekTo = static_cast<std::uint64_t>(
++                (static_cast<unsigned __int128>(index) * static_cast<std::uint64_t>(_grainRate.denominator) * 1'000'000'000ULL + num - 1U) / num);
++            auto ok = true;
++            for (auto* source : _sources)
++            {
++                ok = ::gst_element_seek(source,
++                         1.0,
++                         GST_FORMAT_TIME,
++                         static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE),
++                         GST_SEEK_TYPE_SET,
++                         seekTo,
++                         GST_SEEK_TYPE_NONE,
++                         GST_CLOCK_TIME_NONE) &&
++                     ok;
++            }
++            return ok;
++        }
++
+         // Announces a seeked source's segment from 0, so the running-time
+         // timestamps a live source puts on its buffers fall inside it.
+         static GstPadProbeReturn segmentFromZero(GstPad*, GstPadProbeInfo* info, gpointer)
+@@ -425,6 +489,10 @@ namespace
+ 
+         ~GstreamerPipeline()
+         {
++            for (auto* source : _sources)
++            {
++                ::gst_object_unref(source);
++            }
+             if (_appSink)
+             {
+                 if (GST_OBJECT_REFCOUNT_VALUE(_appSink))
+@@ -497,6 +565,8 @@ namespace
+         GstElement* _appSink;
+         std::uint64_t _mxlBaseTime;
+         std::atomic<GstClockTime> _firstPts{GST_CLOCK_TIME_NONE};
++        std::vector<GstElement*> _sources;
++        bool _probed{false};
+     };
+ 
+     class VideoPipeline : public GstreamerPipeline
+@@ -704,12 +774,32 @@ namespace
+             // i.e. visibly janky motion even with zero dropped frames. One
+             // batch makes the whole grain land at once, at the grain instant.
+             auto slicesPerBatch = static_cast<std::uint16_t>(gstPipeline.config().frameHeight);
++            // Set across a restart, until its first buffer: the next grain
++            // is then already due, and waiting for it would spin.
++            auto restarted = false;
++            auto restartedAt = std::chrono::steady_clock::now();
++            // Whether frames are being written at the clock rather than at
++            // their own media time, how far behind they were when the lag
++            // last grew, and at which grain.
++            auto drifted = false;
++            auto driftLag = std::uint64_t{0};
++            auto driftSince = std::uint64_t{0};
++            auto lastRestart = std::chrono::steady_clock::now() - std::chrono::seconds{10};
++            auto const steadyGrains = ::mxlTimestampToIndex(&gstPipeline.config().frameRate, 2'000'000'000ULL);
+             while (!g_exit_requested)
+             {
+-                auto const timeoutNs = (grainIndex != MXL_UNDEFINED_INDEX) ? ::mxlGetNsUntilIndex(grainIndex + 1, &gstPipeline.config().frameRate)
+-                                                                           : 100'000'000ULL; // arbitrary high timeout for the first grain
++                auto const timeoutNs = (grainIndex != MXL_UNDEFINED_INDEX && !restarted)
++                                         ? ::mxlGetNsUntilIndex(grainIndex + 1, &gstPipeline.config().frameRate)
++                                         : 100'000'000ULL; // arbitrary high timeout for the first grain
++                // A pipeline started again that produces nothing would leave
++                // the flow unwritten with the process looking healthy.
++                if (restarted && std::chrono::steady_clock::now() - restartedAt > std::chrono::seconds{5})
++                {
++                    throw std::runtime_error{"The test source produced no frame within 5 s of being started again."};
++                }
+                 if (auto const pipelineSample = gstPipeline.pull(timeoutNs); pipelineSample)
+                 {
++                    restarted = false;
+                     auto const bufferTs = GST_BUFFER_PTS(pipelineSample.buffer()); // PTS was already converted to TAI time in the pull()
+                     auto gstGrainIndex = ::mxlTimestampToIndex(&gstPipeline.config().frameRate, bufferTs);
+ 
+@@ -726,11 +816,58 @@ namespace
+                     // steady state. The gap on resync is still filled by the
+                     // invalid-grain skip path below.
+                     constexpr std::uint64_t kMaxLagGrains = 30; // ~1s at 30fps
+-                    if (auto const liveIndex = ::mxlGetCurrentIndex(&gstPipeline.config().frameRate);
+-                        liveIndex > gstGrainIndex + kMaxLagGrains)
++                    auto const liveIndex = ::mxlGetCurrentIndex(&gstPipeline.config().frameRate);
++                    auto const lag = liveIndex > gstGrainIndex ? liveIndex - gstGrainIndex : 0U;
++                    if (lag > kMaxLagGrains)
+                     {
++                        // The source drew this frame for an older media
++                        // time, and it is written at the clock, as before:
++                        // late, but every frame. Its counter stays behind
++                        // for good, though.
++                        if (!drifted)
++                        {
++                            drifted = true;
++                            driftLag = lag;
++                            driftSince = liveIndex;
++                            MXL_WARN("DiscreteFlow: content {} grains behind the media time, writing it at the clock until the source keeps up", lag);
++                        }
+                         gstGrainIndex = liveIndex;
+                     }
++                    if (drifted)
++                    {
++                        // Once the thread keeps real time again -- the lag
++                        // has not grown for 2 s -- the pipeline starts once
++                        // more at the next grain's media time, so the
++                        // picture is the media time's again. At most once
++                        // per 10 s, and again after that if it could not.
++                        // A thread under 1% slow grows its lag by a grain
++                        // or less per 2 s, which counts as keeping up: it is
++                        // realigned whenever its lag reaches 30 grains.
++                        auto const now = std::chrono::steady_clock::now();
++                        if (lag > driftLag + 1U)
++                        {
++                            driftLag = lag;
++                            driftSince = liveIndex;
++                        }
++                        else if (liveIndex >= driftSince + steadyGrains && now - lastRestart >= std::chrono::seconds{10})
++                        {
++                            MXL_WARN("DiscreteFlow: content {} grains behind the media time and keeping up, restarting the test source at the media time", lag);
++                            lastRestart = now;
++                            restartedAt = now;
++                            restarted = true;
++                            drifted = !gstPipeline.restart();
++                            if (drifted)
++                            {
++                                // Its frames are written at the clock as
++                                // before; the next attempt comes after the
++                                // cap.
++                                MXL_ERROR("DiscreteFlow: the test source could not be put on the media time; writing its frames at the clock, trying again in 10 s");
++                                driftLag = 0;
++                                driftSince = liveIndex;
++                            }
++                            continue;
++                        }
++                    }
+ 
+                     // First buffer, set the initial grain index
+                     if (grainIndex == MXL_UNDEFINED_INDEX)
+@@ -1144,10 +1281,12 @@ int main(int argc, char** argv)
+                 catch (std::exception const& e)
+                 {
+                     MXL_ERROR("Error while processing video pipeline: {}", e.what());
++                    fail_flow();
+                 }
+                 catch (...)
+                 {
+                     MXL_ERROR("Encountered unknown error while processing video pipeline.");
++                    fail_flow();
+                 }
+             });
+     }
+@@ -1181,10 +1320,12 @@ int main(int argc, char** argv)
+                 catch (std::exception const& e)
+                 {
+                     MXL_ERROR("Error while processing audio pipeline: {}", e.what());
++                    fail_flow();
+                 }
+                 catch (...)
+                 {
+                     MXL_ERROR("Encountered unknown error while processing audio pipeline.");
++                    fail_flow();
+                 }
+             });
+     }
+@@ -1196,5 +1337,5 @@ int main(int argc, char** argv)
+ 
+     ::gst_deinit();
+ 
+-    return 0;
++    return g_failed ? 1 : 0;
+ }
+-- 
+2.55.0
+
