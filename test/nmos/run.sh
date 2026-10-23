@@ -159,13 +159,15 @@ done
 [ $write_rc -eq 0 ] && echo "PASS both flows are written from the start"
 
 # phase NAME: the ball's rising crossings and the ticks' onsets, each in ms
-# into its TAI second, all of them within 0.5 ms of a whole second, and at
-# least one of each.
+# into its TAI second, at least one of each. A tick starts on a sample, so
+# within 0.5 ms of the second. A crossing is interpolated between grains from
+# the ball's measured position, which reads 0.00 at the lane's 648x360 and at
+# 1080p50, and is held to 2 ms. A grain is 20 ms.
 phase() {
   local got
   got=$(docker compose run --rm -T probe 2>/dev/null | tail -1)
   if jq -e '(.crossings | length) > 0 and (.ticks | length) > 0 and
-            ([.crossings[], .ticks[]] | all(. < 0.5 or . > 999.5))' <<<"$got" >/dev/null 2>&1; then
+            (.ticks | all(. < 0.5 or . > 999.5)) and (.crossings | all(. < 2 or . > 998))' <<<"$got" >/dev/null 2>&1; then
     echo "PASS phase $1: $got"
   else
     fail "phase $1: $got"
