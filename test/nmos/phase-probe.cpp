@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <algorithm>
 #include <optional>
 #include <mxl/flow.h>
 #include <mxl/mxl.h>
@@ -44,14 +45,21 @@ namespace
         return static_cast<int>((word(group + 4 * Word[x % 6]) >> Shift[x % 6]) & 0x3ff);
     }
 
-    // The ball's horizontal centre: the midpoint of every run of bright
-    // pixels at least 30 long, which only the ball's middle rows have, not
-    // the strokes of the overlay text. Nothing where no such run is found.
+    // The ball's horizontal centre. The ball is 40 px across, so its middle
+    // rows are runs of 30 to 48 bright pixels centred on one x, about 26
+    // consecutive rows of them. A stroke of the text or clock overlay is a
+    // run of that length too, but a few rows tall, so the ball is the 50 px
+    // band of run midpoints that covers the most consecutive rows, at least
+    // 20 of them. Nothing where there is none.
     std::optional<double> ballX(std::uint8_t const* grain, int width, int height)
     {
+        struct Mid
+        {
+            double x;
+            int y;
+        };
         auto const stride = (width + 47) / 48 * 128;
-        auto sum = 0.0;
-        auto count = 0;
+        auto mids = std::vector<Mid>{};
         for (auto y = 0; y < height; ++y)
         {
             auto const* line = grain + static_cast<std::size_t>(y) * stride;
@@ -63,15 +71,59 @@ namespace
                     ++run;
                     continue;
                 }
-                if (run >= 30)
+                if (run >= 30 && run <= 48)
                 {
-                    sum += x - 1 - (run - 1) / 2.0;
-                    ++count;
+                    mids.push_back(Mid{x - 1 - (run - 1) / 2.0, y});
                 }
                 run = 0;
             }
         }
-        return count > 0 ? std::optional<double>{sum / count} : std::nullopt;
+        std::sort(mids.begin(), mids.end(), [](Mid const& a, Mid const& b) { return a.x < b.x; });
+        auto bestRows = 0;
+        auto bestX = 0.0;
+        for (std::size_t a = 0; a < mids.size(); ++a)
+        {
+            auto band = std::vector<Mid>{};
+            for (auto b = a; b < mids.size() && mids[b].x - mids[a].x <= 50; ++b)
+            {
+                band.push_back(mids[b]);
+            }
+            std::sort(band.begin(), band.end(), [](Mid const& l, Mid const& r) { return l.y < r.y; });
+            // The longest run of consecutive rows in the band, and the x of
+            // its midpoints alone: a stroke at another row in the same band
+            // would pull the average off the ball.
+            std::size_t runStart = 0, bestStart = 0, bestEnd = 0;
+            auto runRows = 0, longest = 0;
+            for (std::size_t k = 0; k < band.size(); ++k)
+            {
+                if (k == 0 || band[k].y > band[k - 1].y + 1)
+                {
+                    runStart = k;
+                    runRows = 1;
+                }
+                else if (band[k].y == band[k - 1].y + 1)
+                {
+                    ++runRows;
+                }
+                if (runRows > longest)
+                {
+                    longest = runRows;
+                    bestStart = runStart;
+                    bestEnd = k + 1;
+                }
+            }
+            if (longest > bestRows)
+            {
+                auto sum = 0.0;
+                for (auto k = bestStart; k < bestEnd; ++k)
+                {
+                    sum += band[k].x;
+                }
+                bestRows = longest;
+                bestX = sum / static_cast<double>(bestEnd - bestStart);
+            }
+        }
+        return bestRows >= 20 ? std::optional<double>{bestX} : std::nullopt;
     }
 
     int definitionInt(mxlInstance instance, char const* id, char const* key)
