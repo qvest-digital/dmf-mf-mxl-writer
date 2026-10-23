@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.11](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.10...v1.0.0-rc.11) (2026-10-23)
+
+
+### Bug Fixes
+
+* **nmos:** advertise each control href once ([#27](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/27)) ([3418d54](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/3418d549c71ebfedd18b6fc832b2a01270374b4a))
+
 ## [1.0.0-rc.10](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.9...v1.0.0-rc.10) (2026-10-23)
 
 
