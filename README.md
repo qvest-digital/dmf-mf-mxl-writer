@@ -160,7 +160,10 @@ Then it runs the AMWA NMOS Testing Tool suites IS-04-01, IS-05-01, IS-05-02 and
 BCP-007-03-01. It also checks, through `test/nmos/phase-probe.cpp`, that the
 ball crosses the middle of the frame and the ticks start on whole TAI seconds
 with NMOS on, after a restart, after a Sender was stopped and started, and with
-NMOS off. It needs docker, curl and jq, and runs locally, not in CI.
+NMOS off, that a video thread starved of CPU at 1080p restarts at most once
+while it is slow and is back on the media time once it has the CPU again, and
+that one whose source cannot be realigned keeps writing and tries again. It
+needs docker, curl and jq, and runs locally, not in CI.
 
 ## Build locally
 
@@ -198,16 +201,25 @@ Renovate rewrites `GO_MXL_TAG` only; its pull requests need `MXL_SRC` and
 
 ## Producer-pacing patches
 
-The image builds `MXL_SRC` @ `MXL_REF` and then applies `patches/*.patch`
-on top. 0001-0005 fix producer pacing specific to this pipeline, 0006 adds
-the overlay-format setting and 0007 makes the audio tone describable. 0008
-seeks every test source, before it plays, to the TAI time of the first grain or
-sample it is committed at, so the ball and the ticks are a function of the
-media time: the same in every process and after every restart. A sine's phase
-is not, since no seek reaches it. 0009 commits each audio batch at its own
-sample range, which libmxl takes by its exclusive end; before, audio landed
-one batch, 10 ms at 48 kHz, ahead of video. They touch `mxl-gst-testsrc` only
-and are not upstreamed.
+The image builds `MXL_SRC` @ `MXL_REF` and then applies `patches/*.patch` on
+top. 0001-0005 fix producer pacing specific to this pipeline, 0006 adds the
+overlay-format setting and 0007 makes the audio tone describable. 0008 seeks
+every test source, before it plays, to the TAI time of the first grain or sample
+it is committed at, so the ball and the ticks are a function of the media time:
+the same in every process and after every restart. A sine's phase is not, since
+no seek reaches it. 0009 commits each audio batch at its own sample range, which
+libmxl takes by its exclusive end; before, audio landed one batch, 10 ms at 48
+kHz, ahead of video. 0010 realigns the video source once its thread keeps real
+time again after falling more than 30 grains behind: 0004 writes such frames at
+the clock, every one of them, but the source's counter stayed behind, so the
+picture carried an older media time for as long as the process ran. Once the lag
+has stopped growing for 2 s the video pipeline starts again at the next grain's
+media time, at most once per 10 s. A start that cannot put the source on the
+media time leaves its frames written at the clock and is tried again 10 s later;
+`MXL_TESTSRC_REFUSE_REALIGN` set makes it fail, for tests. A pipeline started
+again that produces nothing for 5 s, or any other error that ends a flow's
+thread, ends the process with status 1. They touch `mxl-gst-testsrc` only and
+are not upstreamed.
 
 To bump the stock base:
 1. Set `MXL_SRC` and `MXL_REF` to what go-mxl's `.github/libmxl.version`

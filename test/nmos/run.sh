@@ -13,7 +13,13 @@
 #   - a writer that dies takes the Node with it, so the pod restarts;
 #   - the ball crosses the frame's middle and the ticks start on whole TAI
 #     seconds, with NMOS on, after a restart, after a Sender was stopped and
-#     started, and with NMOS off.
+#     started, and with NMOS off;
+#   - a video thread that fell more than 30 grains behind, at 1080p with the
+#     overlays blended on v210 and half a CPU, keeps writing every frame
+#     without restarting while it is slow, and is back on the media time once
+#     it has the CPU again;
+#   - one whose source cannot be put back on the media time keeps writing
+#     its video, logs it, and tries again 10 s later.
 #
 # Then it runs the AMWA NMOS Testing Tool suites IS-04-01, IS-05-01, IS-05-02
 # and BCP-007-03-01. Exits non-zero if any check or suite fails. Needs docker,
@@ -79,8 +85,9 @@ EOF
 chmod -R a+r "${FLOW_CONFIG}"
 
 OFF_NAME="mxl-writer-nmos-off-$$"
+SLOW_NAME="mxl-writer-nmos-slow-$$"
 cleanup() {
-  docker rm -f "$OFF_NAME" >/dev/null 2>&1 || true
+  docker rm -f "$OFF_NAME" "$SLOW_NAME" >/dev/null 2>&1 || true
   docker compose --profile probe down -v --remove-orphans >/dev/null 2>&1 || true
   # The flows belong to the container's root, so they are removed from inside one.
   docker run --rm -v "${MXL_ROOT}:/r" --entrypoint sh "$WRITER_IMAGE" -c 'rm -rf /r/*' >/dev/null 2>&1 || true
@@ -278,4 +285,72 @@ docker run -d --name "$OFF_NAME" --network none -v "${MXL_ROOT}:/run/mxl" -v "${
   "$WRITER_IMAGE" $(docker compose config --format json | jq -r '.services.writer.command | join(" ")') >/dev/null
 sleep 3
 phase "with NMOS off"
+# A video thread that cannot keep real time falls behind the media time.
+# Starved of CPU at 1080p with the overlays blended on v210, it falls more
+# than 30 grains behind and the writer writes its frames at the clock. It
+# must not restart its source while it stays slow, and once it has the CPU
+# again it must restart once and draw the media time's content. The
+# crossings are read across the grains a starved writer skips, so they are
+# held to 5 ms, a quarter grain.
+docker rm -f "$OFF_NAME" >/dev/null 2>&1 || true
+SLOW_VIDEO=5a1e0000-0000-4000-8000-0000000000f3
+SLOW_AUDIO=5a1e0000-0000-4000-8000-0000000000a3
+jq --arg id "$SLOW_VIDEO" '.id = $id | .frame_width = 1920 | .frame_height = 1080 |
+    .components = [{name: "Y", width: 1920, height: 1080, bit_depth: 10},
+                   {name: "Cb", width: 960, height: 1080, bit_depth: 10},
+                   {name: "Cr", width: 960, height: 1080, bit_depth: 10}]' \
+  "${FLOW_CONFIG}/video-flow.json" >"${FLOW_CONFIG}/slow-video-flow.json"
+jq --arg id "$SLOW_AUDIO" '.id = $id' "${FLOW_CONFIG}/audio-flow.json" >"${FLOW_CONFIG}/slow-audio-flow.json"
+chmod a+r "${FLOW_CONFIG}"/slow-*.json
+docker run -d --name "$SLOW_NAME" --network none --cpus 0.5 -e MXL_OVERLAY_FORMAT=v210 \
+  -v "${MXL_ROOT}:/run/mxl" -v "${FLOW_CONFIG}:/etc/flow-config:ro" "$WRITER_IMAGE" \
+  -d "/run/mxl/domains/${SECOND_ID}" -v /etc/flow-config/slow-video-flow.json -p ball -t SLOW \
+  -a /etc/flow-config/slow-audio-flow.json --audio-wave ticks --audio-freq 1000,1000 -g slow >/dev/null
+# Counted rather than grep -q: an early exit cuts docker logs off, and
+# pipefail then reports the match as a failure.
+drifted() { [ "$(docker logs "$SLOW_NAME" 2>&1 | grep -c 'writing it at the clock until the source keeps up' || true)" -ge 1 ]; }
+restarts() { docker logs "$SLOW_NAME" 2>&1 | grep -c 'restarting the test source' || true; }
+restarted() { [ "$(restarts)" -ge 1 ]; }
+until_ok 90 drifted || true
+sleep 20
+slow_restarts=$(restarts)
+docker update --cpus 4 "$SLOW_NAME" >/dev/null
+until_ok 30 restarted || true
+sleep 8
+got=$(docker run --rm --network none -e LD_LIBRARY_PATH=/src/build/lib -v "${MXL_ROOT}:/run/mxl:ro" \
+  --entrypoint /src/build/tools/mxl-writer-nmos/mxl-phase-probe "$PROBE_IMAGE" \
+  "/run/mxl/domains/${SECOND_ID}" "$SLOW_VIDEO" "$SLOW_AUDIO" 8 2>/dev/null | tail -1)
+if drifted && [ "$slow_restarts" -le 1 ] && restarted && jq -e '(.crossings | length) > 0 and (.ticks | length) > 0 and
+     (.ticks | all(. < 0.5 or . > 999.5)) and (.crossings | all(. < 5 or . > 995))' <<<"$got" >/dev/null 2>&1; then
+  echo "PASS a video thread that fell behind is back on the media time ($slow_restarts restarts while slow, $(restarts) in all): $got"
+else
+  fail "after falling behind: $(drifted && echo drifted || echo 'never drifted'), $slow_restarts restarts while slow, $(restarts) in all, $got"
+fi
+docker rm -f "$SLOW_NAME" >/dev/null 2>&1 || true
+
+# The same, with the realigning seek refused: the writer must log it, keep
+# writing video at the clock, keep running, and try again after the cap.
+docker run -d --name "$SLOW_NAME" --network none --cpus 0.5 -e MXL_OVERLAY_FORMAT=v210 -e MXL_TESTSRC_REFUSE_REALIGN=1 \
+  -v "${MXL_ROOT}:/run/mxl" -v "${FLOW_CONFIG}:/etc/flow-config:ro" "$WRITER_IMAGE" \
+  -d "/run/mxl/domains/${SECOND_ID}" -v /etc/flow-config/slow-video-flow.json -p ball -t SLOW \
+  -a /etc/flow-config/slow-audio-flow.json --audio-wave ticks --audio-freq 1000,1000 -g slow >/dev/null
+refusals() { docker logs "$SLOW_NAME" 2>&1 | grep -c 'could not be put on the media time' || true; }
+refused_twice() { [ "$(refusals)" -ge 2 ]; }
+until_ok 90 drifted || true
+docker update --cpus 4 "$SLOW_NAME" >/dev/null
+until_ok 40 refused_twice || true
+# Grains the video head advanced in 2 s, read with mxl-info in the writer.
+slow_head() {
+  docker exec "$SLOW_NAME" /usr/bin/mxl-info -d "/run/mxl/domains/${SECOND_ID}" -f "$SLOW_VIDEO" 2>/dev/null |
+    awk -F: '/Head index/ {gsub(/ /, "", $2); print $2}'
+}
+h0=$(slow_head); sleep 2; h1=$(slow_head)
+advanced=$(( ${h1:-0} - ${h0:-0} ))
+running=$(docker inspect -f '{{.State.Running}}' "$SLOW_NAME")
+if refused_twice && [ "$running" = true ] && [ "$advanced" -ge 90 ] && [ "$advanced" -le 110 ]; then
+  echo "PASS a source that cannot be realigned keeps writing and tries again ($(refusals) refusals, $advanced grains in 2 s)"
+else
+  fail "realign refused: $(refusals) refusals, running=$running, $advanced grains in 2 s"
+fi
+docker rm -f "$SLOW_NAME" >/dev/null 2>&1 || true
 exit $rc

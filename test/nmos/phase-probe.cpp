@@ -159,7 +159,11 @@ namespace
         auto const rate = config.common.grainRate;
         auto index = mxlGetCurrentIndex(&rate);
         auto const end = index + static_cast<std::uint64_t>(seconds * rate.numerator / rate.denominator);
+        // The last grain the ball was found in, so a crossing is placed
+        // across a few grains the writer skipped as well as between two
+        // adjacent ones; the ball moves near-linearly there.
         auto previous = std::optional<double>{};
+        auto previousIndex = std::uint64_t{0};
         for (; index < end; ++index)
         {
             auto info = mxlGrainInfo{};
@@ -167,19 +171,23 @@ namespace
             if (mxlFlowReaderGetGrain(reader, index, Second, &info, &payload) != MXL_STATUS_OK || payload == nullptr ||
                 (info.flags & MXL_GRAIN_FLAG_INVALID) != 0)
             {
-                previous.reset();
                 continue;
             }
             auto const x = ballX(payload, width, height);
+            if (!x)
+            {
+                continue;
+            }
             auto const middle = width / 2.0;
-            if (previous && x && *previous < middle && *x >= middle)
+            if (previous && index - previousIndex <= 4 && *previous < middle && *x >= middle)
             {
                 auto const fraction = (middle - *previous) / (*x - *previous);
-                auto const at = static_cast<double>(mxlIndexToTimestamp(&rate, index - 1)) +
-                                fraction * static_cast<double>(mxlIndexToTimestamp(&rate, index) - mxlIndexToTimestamp(&rate, index - 1));
+                auto const from = static_cast<double>(mxlIndexToTimestamp(&rate, previousIndex));
+                auto const at = from + fraction * (static_cast<double>(mxlIndexToTimestamp(&rate, index)) - from);
                 out.push_back(std::fmod(at, 1e9) / 1e6);
             }
             previous = x;
+            previousIndex = index;
         }
         mxlReleaseFlowReader(instance, reader);
         return out;
