@@ -93,18 +93,21 @@ mxl-writer-nmos -d <domain> [-v <video flow json> ...] [-a <audio flow json> ...
 
 | Variable | Default | Description |
 |---|---|---|
-| `NMOS_HOST_ADDRESS` | *(required)* | Address the Node's APIs are reached at, which the registry hands to controllers. Also the Node's host name, so every advertised href resolves |
+| `NMOS_HOST_ADDRESS` | *(required)* | Address the Node's APIs are reached at, which the registry hands to controllers |
+| `NMOS_HOST_NAME` | *(the pod's DNS name)* | DNS name the Node's APIs are reached at. It must contain a dot and must not be an address. Required outside Kubernetes. The Node advertises its APIs under the host name, then the address |
+| `NMOS_POD_NAMESPACE` | *(required where `NMOS_HOST_NAME` is unset)* | Namespace of the pod. The Node's host name is then the pod's DNS name, `<address with dashes>.<namespace>.pod.<cluster domain>`, which CoreDNS serves with `pods insecure` or `pods verified`. The cluster domain is taken from the `<namespace>.svc.` entry in the last search line of `/etc/resolv.conf` |
 | `NMOS_SEED` | *(required)* | Resource ids derive from it, so it must survive a restart and differ between instances |
 | `NMOS_HTTP_PORT` | *(library default)* | Port of the Node and Connection APIs |
 | `NMOS_REGISTRY_HOST` / `NMOS_REGISTRY_PORT` | *(unset -- DNS-SD)* | A fixed IS-04 Registration API, which disables discovery |
 | `NMOS_SYSTEM_HOST` / `NMOS_SYSTEM_PORT` | *(the registry's)* | A fixed IS-09 System API. nmos-cpp serves it beside the registry |
-| `NMOS_DNS_DOMAIN` | *(library default)* | DNS-SD domain to browse for a registry where none is fixed |
+| `NMOS_DNS_DOMAIN` | *(the host name's domain, else the library default)* | DNS-SD domain to browse for a registry where none is fixed |
 | `NMOS_LABEL` / `NMOS_DESCRIPTION` | `MXL test writer` / `Test patterns written into MXL flows` | Node and Device label and description. A Sender is labelled `<label> video` or `<label> audio` |
 
 Only the `-x value` and `--name value` forms are taken. An option the test
 source does not take, an option without its value, a video option without
 `-v` or an audio option without `-a` exits with status 2, as does a flow id that
-is not a lowercase UUID or a missing `NMOS_HOST_ADDRESS` or `NMOS_SEED`.
+is not a lowercase UUID, a missing `NMOS_HOST_ADDRESS` or `NMOS_SEED`, or no
+host name from `NMOS_HOST_NAME` or `NMOS_POD_NAMESPACE`.
 
 | Sender | Flow | Format |
 |---|---|---|

@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -25,6 +26,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <nvnmos.h>
+#include "host-name.hpp"
 #include "repeats.hpp"
 #include "senders.hpp"
 
@@ -247,6 +249,8 @@ namespace
     {
         NvNmosNodeServer server{};
         std::string hostAddress;
+        // Advertised before the address.
+        std::string hostName;
         std::string seed;
         std::string label;
         std::string description;
@@ -300,11 +304,9 @@ namespace
         services.system_port = node.systemPort;
 
         auto config = NvNmosNodeConfig{};
-        // The address the Node was given, as its host name too. NvNmos
-        // advertises every Connection API under the host name as well as the
-        // addresses, host name first, and left unset that is the pod's own
-        // name, which resolves nowhere outside it.
-        config.host_name = node.hostAddress.c_str();
+        // NvNmos advertises every API under the host name first, then the
+        // addresses, so the host name has to be a DNS name controllers resolve.
+        config.host_name = node.hostName.c_str();
         config.host_addresses = hostAddresses;
         config.num_host_addresses = 1;
         config.http_port = node.httpPort;
@@ -410,6 +412,15 @@ int main(int argc, char** argv)
         log("NMOS_SEED is required: the Node's resource ids derive from it");
         return 2;
     }
+    auto resolvConf = std::ifstream{"/etc/resolv.conf"};
+    auto hostNameError = std::string{};
+    auto hostName = host_name::nodeHostName(env("NMOS_HOST_NAME"), node.hostAddress, env("NMOS_POD_NAMESPACE"), resolvConf, hostNameError);
+    if (!hostName)
+    {
+        log("%s", hostNameError.c_str());
+        return 2;
+    }
+    node.hostName = *hostName;
 
     // The flows are written whether or not the Node is up yet, as without
     // NMOS.

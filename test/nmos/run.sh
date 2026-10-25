@@ -35,6 +35,7 @@ REPO_ROOT=$(cd ../.. && pwd)
 export WRITER_IMAGE="${WRITER_IMAGE:-dmf-mf-mxl-writer:nmos-dev}"
 export PROBE_IMAGE="${PROBE_IMAGE:-dmf-mf-mxl-writer:nmos-build}"
 NODE=172.30.97.20
+NAME=writer.lane.test
 PORT=8080
 QUERY=http://172.30.97.10:8010/x-nmos/query/v1.3
 CONN=http://$NODE:$PORT/x-nmos/connection/v1.2/single/senders
@@ -122,11 +123,20 @@ not_writing() { ! writing "$1"; }
 # away would pass that -- so it has to stay quiet.
 stays_quiet() { until_ok 15 not_writing "$1" && sleep 3 && not_writing "$1"; }
 
-# Every Connection API href the Node advertises has to be reachable at the
-# address it was given; a controller tries them in order.
-hrefs=$(in_lane "$QUERY/devices/" | jq -r '.[].controls[].href' | sort -u || true)
-if [ -z "$hrefs" ] || grep -v "^http://$NODE:" <<<"$hrefs" >/dev/null; then
-  fail "advertised hrefs"; sed 's/^/    /' <<<"${hrefs:-(none)}"
+# Every Connection API and the Node API are advertised once under the Node's
+# DNS name and once under its address, the name first, and the name resolves
+# from another container: a controller tries the hrefs in order.
+devices=$(in_lane "$QUERY/devices/" || true)
+hrefs=$(jq -r '.[].controls[].href' <<<"$devices" || true)
+paths=$(sed -E 's|^http://[^/]*||' <<<"$hrefs" | sort -u)
+want=$(while read -r p; do echo "http://$NAME:$PORT$p"; echo "http://$NODE:$PORT$p"; done <<<"$paths" | sort)
+endpoints=$(in_lane "$QUERY/nodes/" | jq -r --arg a "$NODE" \
+  '.[] | select(any(.api.endpoints[]; .host == $a)) | [.api.endpoints[].host] | join(" ")' || true)
+if [ -z "$hrefs" ] || [ "$(sort <<<"$hrefs")" != "$want" ] \
+    || jq -r '.[].controls[0].href' <<<"$devices" | grep -qv "^http://$NAME:" \
+    || [ "$endpoints" != "$NAME $NODE" ] \
+    || ! in_lane -f -o /dev/null "http://$NAME:$PORT/x-nmos/node/"; then
+  fail "advertised hrefs"; sed 's/^/    /' <<<"${hrefs:-(none)}"; echo "    node api: ${endpoints:-(none)}"
 else
   echo "PASS advertised hrefs"
 fi
