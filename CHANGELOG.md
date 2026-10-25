@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.12](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.11...v1.0.0-rc.12) (2026-10-25)
+
+
+### Bug Fixes
+
+* **nmos:** advertise the pod's DNS name as the Node's host name ([#29](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/29)) ([fd7ad2d](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/fd7ad2da03ad8964691197974bde39266f9a4370))
+
 ## [1.0.0-rc.11](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.10...v1.0.0-rc.11) (2026-10-23)
 
 
