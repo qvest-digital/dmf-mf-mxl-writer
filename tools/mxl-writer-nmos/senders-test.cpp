@@ -6,9 +6,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <unistd.h>
+#include "host-name.hpp"
 #include "repeats.hpp"
 #include "senders.hpp"
 
@@ -252,8 +254,72 @@ namespace
     }
 }
 
+namespace
+{
+    std::string podName(std::string const& address, std::string const& ns, std::string const& resolvConf)
+    {
+        auto in = std::istringstream{resolvConf};
+        return host_name::podDnsName(address, ns, in);
+    }
+
+    void hostNames()
+    {
+        // The search list cluster DNS gives a pod, followed by the node's own.
+        auto const pod = "search lane.svc.cluster.local svc.cluster.local cluster.local example.org\n"
+                         "nameserver 10.96.0.10\n"
+                         "options ndots:5\n";
+        check(podName("10.244.5.119", "lane", pod) == "10-244-5-119.lane.pod.cluster.local",
+            "an IPv4 address becomes the pod's DNS name");
+        check(podName("10.0.0.7", "lane", "search lane.svc.k8s.example svc.k8s.example k8s.example\n") ==
+                  "10-0-0-7.lane.pod.k8s.example",
+            "the cluster domain is read from the search list, not assumed");
+        check(podName("fd00::1", "lane", pod) == "fd00--1.lane.pod.cluster.local", "an IPv6 address has its colons dashed");
+        check(podName("10.0.0.7", "lane", "search lane.svc.cluster.local.\n") == "10-0-0-7.lane.pod.cluster.local",
+            "a trailing dot is dropped");
+        // Another namespace's entry, or none, gives no name: a guessed domain
+        // would advertise a host no controller resolves.
+        check(podName("10.0.0.7", "lane", "search other.svc.cluster.local svc.cluster.local\n").empty(),
+            "another namespace's search entry is not taken");
+        check(podName("10.0.0.7", "lane", "nameserver 10.96.0.10\n").empty(), "no search list gives no name");
+        check(podName("10.0.0.7", "lane", "search lane.svc.\n").empty(), "an empty cluster domain gives no name");
+        check(podName("10.0.0.7", "lane", "search lane.svc..\n").empty(), "a lone dot is no cluster domain");
+        // The resolver reads the last search line only.
+        check(podName("10.0.0.7", "lane", "search lane.svc.old.example\nsearch lane.svc.cluster.local\n") ==
+                  "10-0-0-7.lane.pod.cluster.local",
+            "the last search line is the one read");
+        check(podName("10.0.0.7", "lane", "search lane.svc.cluster.local\nsearch example.org\n").empty(),
+            "an entry on an earlier search line is not read");
+
+        // Which host name the Node is given: an explicit one first, then the
+        // pod's, and never NvNmos's default or the address.
+        auto host = [](std::string const& explicitName, std::string const& ns, std::string const& resolvConf, std::string& error) {
+            auto in = std::istringstream{resolvConf};
+            error.clear();
+            return host_name::nodeHostName(explicitName, "10.244.5.119", ns, in, error);
+        };
+        auto error = std::string{};
+        auto got = host("node.lane.example", "lane", pod, error);
+        check(got && *got == "node.lane.example", "an explicit host name takes precedence over the pod's");
+        got = host("node.lane.example", "", "", error);
+        check(got && *got == "node.lane.example", "an explicit host name needs no namespace or search list");
+        got = host("", "lane", pod, error);
+        check(got && *got == "10-244-5-119.lane.pod.cluster.local", "without one, a namespace gives the pod's DNS name");
+        got = host("", "", pod, error);
+        check(!got && error.find("NMOS_HOST_NAME or NMOS_POD_NAMESPACE") != std::string::npos, "neither is refused, naming both");
+        got = host("", "lane", "search other.svc.cluster.local\n", error);
+        check(!got && error.find("lane.svc.") != std::string::npos, "a namespace the search list does not name is refused, not guessed");
+        got = host("10.244.5.119", "lane", pod, error);
+        check(!got && error.find("address") != std::string::npos, "an IPv4 address is not a host name");
+        got = host("fd00::1", "lane", pod, error);
+        check(!got && error.find("address") != std::string::npos, "an IPv6 address is not a host name");
+        got = host("writer", "lane", pod, error);
+        check(!got && error.find("domain") != std::string::npos, "a name without a domain is refused");
+    }
+}
+
 int main()
 {
+    hostNames();
     repeating();
     splitting();
     uuids();

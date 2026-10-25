@@ -22,7 +22,7 @@ ARG MXL_REF=c259243931333497e61faabeedac8048915dcb2b
 # as well, so a re-pushed tag cannot change the library under the build. libnvnmos.so links its own
 # dependencies statically and is built on the Debian release the go-mxl images
 # are; it does not link libmxl.
-ARG NVNMOS_IMAGE=ghcr.io/qvest-digital/dmf-mf-mxl-compositor/nvnmos:36fb7db9b5616a26f77164de735c15171e01aaed-c9423d36@sha256:659a85cbe21471f2d12382a960640cd87c0eecda8d5dccaa337680214a5b22eb
+ARG NVNMOS_IMAGE=ghcr.io/qvest-digital/dmf-mf-mxl-compositor/nvnmos:36fb7db9b5616a26f77164de735c15171e01aaed-738ca8fb@sha256:c8eedb07ad958279637226a4105ae07530116e1bb0de965ddf0d3ba68f64168d
 
 FROM ${NVNMOS_IMAGE} AS nvnmos
 

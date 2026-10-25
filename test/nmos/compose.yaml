@@ -35,9 +35,11 @@ services:
     depends_on:
       registry:
         condition: service_started
+    # Outside Kubernetes there is no pod record, so the Node is named.
     networks:
       lane:
         ipv4_address: 172.30.97.20
+        aliases: [writer.lane.test]
     volumes:
       - ${MXL_ROOT:?run.sh creates the runtime root}:/run/mxl
       - ${FLOW_CONFIG:?run.sh writes the flow definitions}:/etc/flow-config:ro
@@ -61,6 +63,7 @@ services:
       - lane
     environment:
       NMOS_HOST_ADDRESS: 172.30.97.20
+      NMOS_HOST_NAME: writer.lane.test
       NMOS_HTTP_PORT: "8080"
       NMOS_SEED: mxl-writer-nmos-lane
       NMOS_LABEL: lane
