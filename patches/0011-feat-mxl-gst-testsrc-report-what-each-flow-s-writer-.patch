@@ -1,0 +1,257 @@
+From 8660cea244a57ab7cb0dfc0cdcee981cff6005da Mon Sep 17 00:00:00 2001
+From: marquies <me@patrickbreucking.de>
+Date: Wed, 28 Oct 2026 00:09:28 +0100
+Subject: [PATCH] feat(mxl-gst-testsrc): report what each flow's writer calls
+ return
+
+The test source logs a failed create, open or commit and the grains it
+fills with invalid ones when frames arrive late, but nothing outside
+the process can count them, so a scrape cannot tell a writer that
+keeps up from one that writes placeholders.
+
+Every flow is now created, opened and committed through the
+libmxl-monitoring writer wrappers, which count whole grains and
+committed samples as ok and every failure by its cause. A grain the
+gap filler marks invalid and a silence range written for samples that
+never arrived count as input_late. --metrics-port serves the counts as
+Prometheus text at /metrics, with /healthz, from a thread of its own;
+a port that cannot be bound ends the process with status 1. Without
+the option nothing listens.
+---
+ tools/mxl-gst/CMakeLists.txt |  1 +
+ tools/mxl-gst/testsrc.cpp    | 80 ++++++++++++++++++++++++++++--------
+ 2 files changed, 64 insertions(+), 17 deletions(-)
+
+diff --git a/tools/mxl-gst/CMakeLists.txt b/tools/mxl-gst/CMakeLists.txt
+index 7bf0bb5..679aa8b 100644
+--- a/tools/mxl-gst/CMakeLists.txt
++++ b/tools/mxl-gst/CMakeLists.txt
+@@ -46,6 +46,7 @@ if (gstreamer_FOUND)
+     target_link_libraries(mxl-gst-testsrc
+             PRIVATE
+                 mxl
++                mxl-monitoring::http
+                 stduuid
+                 fmt::fmt
+                 picojson::picojson
+diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
+index 61a907d..44b0548 100644
+--- a/tools/mxl-gst/testsrc.cpp
++++ b/tools/mxl-gst/testsrc.cpp
+@@ -2,6 +2,7 @@
+ // SPDX-License-Identifier: Apache-2.0
+ 
+ #include <atomic>
++#include <cerrno>
+ #include <chrono>
+ #include <csignal>
+ #include <numeric>
+@@ -20,6 +21,10 @@
+ #include <gst/app/gstappsink.h>
+ #include <gst/gst.h>
+ #include <gst/gstsystemclock.h>
++#include <mxl-monitoring/http.h>
++#include <mxl-monitoring/monitoring.h>
++#include <mxl-monitoring/reader.h>
++#include <mxl-monitoring/writer.h>
+ #include <picojson/wrapper.h>
+ #include <mxl/flow.h>
+ #include <mxl/mxl.h>
+@@ -712,19 +717,25 @@ namespace
+     class MxlWriter
+     {
+     public:
+-        MxlWriter(std::string const& domain, std::string const& flow_descriptor, std::string const& flowOptions)
++        MxlWriter(mxlMonitoring monitoring, std::string const& flowId, std::string const& domain, std::string const& flow_descriptor,
++            std::string const& flowOptions)
+             // Delegate to the default ctor. See comment below on why we do that
+             : MxlWriter{}
+         {
+-            _instance = ::mxlCreateInstance(domain.c_str(), "");
++            if (::mxlMonitoringAddFlow(monitoring, flowId.c_str(), MXL_MONITORING_ROLE_WRITER, &_flow) != MXL_STATUS_OK)
++            {
++                throw std::runtime_error{"Failed to monitor flow " + flowId + "."};
++            }
++
++            _instance = ::mxlMonitoringCreateInstance(_flow, domain.c_str(), "");
+             if (_instance == nullptr)
+             {
+                 throw std::runtime_error{"Failed to create MXL instance."};
+             }
+ 
+             bool flowWasCreated = false;
+-            if (::mxlCreateFlowWriter(_instance, flow_descriptor.c_str(), flowOptions.c_str(), &_writer, &_configInfo, &flowWasCreated) !=
+-                MXL_STATUS_OK)
++            if (::mxlMonitoringCreateFlowWriter(
++                    _flow, _instance, flow_descriptor.c_str(), flowOptions.c_str(), &_writer, &_configInfo, &flowWasCreated) != MXL_STATUS_OK)
+             {
+                 throw std::runtime_error{"Failed to create flow writer."};
+             }
+@@ -899,18 +910,20 @@ namespace
+                             auto const actualGrainIndex = grainIndex - offset;
+ 
+                             /// Open the grain for writing.
+-                            if (::mxlFlowWriterOpenGrain(_writer, actualGrainIndex, &gInfo, &mxlBuffer) != MXL_STATUS_OK)
++                            if (::mxlMonitoringFlowWriterOpenGrain(_flow, _writer, actualGrainIndex, &gInfo, &mxlBuffer) != MXL_STATUS_OK)
+                             {
+                                 MXL_ERROR("Failed to open grain at index '{}'", actualGrainIndex);
+                                 break;
+                             }
+ 
+                             gInfo.flags = MXL_GRAIN_FLAG_INVALID;
+-                            if (::mxlFlowWriterCommitGrain(_writer, &gInfo) != MXL_STATUS_OK)
++                            if (::mxlMonitoringFlowWriterCommitGrain(_flow, _writer, &gInfo) != MXL_STATUS_OK)
+                             {
+                                 MXL_ERROR("Failed to commit invalid grain at index '{}'", actualGrainIndex);
+                                 break;
+                             }
++                            // No frame arrived in time for this grain.
++                            ::mxlMonitoringRecordWriteOutcome(_flow, MXL_MONITORING_WRITE_INPUT_LATE, MXL_STATUS_OK, actualGrainIndex, 1);
+ 
+                             grainIndex += 1U;
+                         }
+@@ -930,7 +943,7 @@ namespace
+                             std::uint8_t* mxlBuffer = nullptr;
+ 
+                             /// Open the grain for writing.
+-                            if (::mxlFlowWriterOpenGrain(_writer, actualGrainIndex, &gInfo, &mxlBuffer) != MXL_STATUS_OK)
++                            if (::mxlMonitoringFlowWriterOpenGrain(_flow, _writer, actualGrainIndex, &gInfo, &mxlBuffer) != MXL_STATUS_OK)
+                             {
+                                 MXL_ERROR("Failed to open grain at index '{}'", actualGrainIndex);
+                                 ::gst_buffer_unmap(pipelineSample.buffer(), &mapInfo);
+@@ -963,7 +976,7 @@ namespace
+                                 ::memcpy(mxlBuffer + batchOffset, mapInfo.data + batchOffset, nbSlices * sliceSize);
+                                 gInfo.validSlices += nbSlices;
+ 
+-                                if (::mxlFlowWriterCommitGrain(_writer, &gInfo) != MXL_STATUS_OK)
++                                if (::mxlMonitoringFlowWriterCommitGrain(_flow, _writer, &gInfo) != MXL_STATUS_OK)
+                                 {
+                                     MXL_ERROR("Failed to commit grain at index '{}'", actualGrainIndex);
+                                     break;
+@@ -1046,8 +1059,8 @@ namespace
+ 
+                             // libmxl takes the end of the range, exclusive.
+                             mxlMutableWrappedMultiBufferSlice payloadBuffersSlices;
+-                            if (::mxlFlowWriterOpenSamples(_writer, actualSampleIndex + nbSamplesBatch, nbSamplesBatch, &payloadBuffersSlices) !=
+-                                MXL_STATUS_OK)
++                            if (::mxlMonitoringFlowWriterOpenSamples(
++                                    _flow, _writer, actualSampleIndex + nbSamplesBatch, nbSamplesBatch, &payloadBuffersSlices) != MXL_STATUS_OK)
+                             {
+                                 MXL_ERROR("Failed to open samples at index '{}'", actualSampleIndex);
+                                 break;
+@@ -1065,11 +1078,15 @@ namespace
+                                 }
+                             }
+ 
+-                            if (::mxlFlowWriterCommitSamples(_writer) != MXL_STATUS_OK)
++                            if (auto const status = ::mxlFlowWriterCommitSamples(_writer); status != MXL_STATUS_OK)
+                             {
++                                ::mxlMonitoringRecordWrite(_flow, status, actualSampleIndex + nbSamplesBatch, nbSamplesBatch);
+                                 MXL_ERROR("Failed to commit silence samples at index '{}'", actualSampleIndex);
+                                 break;
+                             }
++                            // No samples arrived in time for this range.
++                            ::mxlMonitoringRecordWriteOutcome(
++                                _flow, MXL_MONITORING_WRITE_INPUT_LATE, MXL_STATUS_OK, actualSampleIndex + nbSamplesBatch, nbSamplesBatch);
+ 
+                             // Move to the next silence batch
+                             nbSamples -= nbSamplesBatch;
+@@ -1087,8 +1104,8 @@ namespace
+ 
+                             auto payloadBuffersSlices = ::mxlMutableWrappedMultiBufferSlice{};
+                             // libmxl takes the end of the range, exclusive.
+-                            if (::mxlFlowWriterOpenSamples(_writer, actualSampleIndex + nbSamplesPerChan, nbSamplesPerChan, &payloadBuffersSlices) !=
+-                                MXL_STATUS_OK)
++                            if (::mxlMonitoringFlowWriterOpenSamples(
++                                    _flow, _writer, actualSampleIndex + nbSamplesPerChan, nbSamplesPerChan, &payloadBuffersSlices) != MXL_STATUS_OK)
+                             {
+                                 MXL_ERROR("Failed to open samples at index '{}'", actualSampleIndex);
+                                 ::gst_buffer_unmap(pipelineSample.buffer(), &mapInfo);
+@@ -1111,7 +1128,7 @@ namespace
+                                 }
+                             }
+ 
+-                            if (::mxlFlowWriterCommitSamples(_writer) != MXL_STATUS_OK)
++                            if (::mxlMonitoringFlowWriterCommitSamples(_flow, _writer) != MXL_STATUS_OK)
+                             {
+                                 MXL_ERROR("Failed to open samples at index '{}'", actualSampleIndex);
+                                 ::gst_buffer_unmap(pipelineSample.buffer(), &mapInfo);
+@@ -1139,12 +1156,14 @@ namespace
+          * state.
+          */
+         constexpr MxlWriter() noexcept
+-            : _instance{}
++            : _flow{}
++            , _instance{}
+             , _writer{}
+             , _configInfo{}
+         {}
+ 
+     private:
++        mxlMonitoringFlow _flow;
+         mxlInstance _instance;
+ 
+         mxlFlowWriter _writer;
+@@ -1236,8 +1255,27 @@ int main(int argc, char** argv)
+     auto groupHintOpt = app.add_option("-g, --group-hint", groupHint, "The group-hint value to use in the flow json definition");
+     groupHintOpt->default_val("mxl-gst-testsrc-group");
+ 
++    auto metricsPort = std::uint16_t{};
++    auto metricsPortOpt = app.add_option("--metrics-port", metricsPort, "Port to serve /metrics and /healthz on, every interface; none without it");
++    metricsPortOpt->check(CLI::Range(1, 65535));
++
+     CLI11_PARSE(app, argc, argv);
+ 
++    // What each flow's writer calls return, served as Prometheus text.
++    auto monitoring = mxlMonitoring{};
++    if (::mxlMonitoringCreate(nullptr, &monitoring) != MXL_STATUS_OK)
++    {
++        MXL_ERROR("Failed to create the monitoring context.");
++        return 1;
++    }
++    auto metrics = mxlMonitoringHttp{};
++    if (metricsPortOpt->count() > 0 && ::mxlMonitoringHttpStart(monitoring, nullptr, metricsPort, &metrics) != MXL_STATUS_OK)
++    {
++        MXL_ERROR("Failed to serve metrics on port {}: {}", metricsPort, std::strerror(errno));
++        ::mxlMonitoringDestroy(monitoring);
++        return 1;
++    }
++
+     ::gst_init(nullptr, nullptr);
+ 
+     auto threads = std::vector<std::thread>{};
+@@ -1257,7 +1295,8 @@ int main(int argc, char** argv)
+                     }
+ 
+                     json_utils::updateGroupHint(flowNmos, groupHint, "video");
+-                    auto mxlWriter = MxlWriter{domain, json_utils::serializeJson(flowNmos), flowOptions};
++                    auto mxlWriter = MxlWriter{
++                        monitoring, json_utils::getField<std::string>(flowNmos, "id"), domain, json_utils::serializeJson(flowNmos), flowOptions};
+                     auto const frameWidth = static_cast<std::uint64_t>(json_utils::getField<double>(flowNmos, "frame_width"));
+                     auto const frameHeight = static_cast<std::uint64_t>(json_utils::getField<double>(flowNmos, "frame_height"));
+                     if (mxlWriter.maxCommitBatchSizeHint() > frameHeight)
+@@ -1302,7 +1341,8 @@ int main(int argc, char** argv)
+                     auto const flowOptions = !audioFlowOptionFile.empty() ? readFile(audioFlowOptionFile) : std::string{};
+                     json_utils::updateGroupHint(flowNmos, groupHint, "audio");
+ 
+-                    auto mxlWriter = MxlWriter{domain, json_utils::serializeJson(flowNmos), flowOptions};
++                    auto mxlWriter = MxlWriter{
++                        monitoring, json_utils::getField<std::string>(flowNmos, "id"), domain, json_utils::serializeJson(flowNmos), flowOptions};
+ 
+                     auto const gstConfig = AudioPipelineConfig{
+                         .sampleRate = json_utils::getRational(flowNmos, "sample_rate"),
+@@ -1337,5 +1377,11 @@ int main(int argc, char** argv)
+ 
+     ::gst_deinit();
+ 
++    if (metrics != nullptr)
++    {
++        ::mxlMonitoringHttpStop(metrics);
++    }
++    ::mxlMonitoringDestroy(monitoring);
++
+     return g_failed ? 1 : 0;
+ }
+-- 
+2.34.1
+

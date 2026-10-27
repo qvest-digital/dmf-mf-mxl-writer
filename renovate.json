@@ -9,6 +9,12 @@
       "matchPackageNames": ["ghcr.io/qvest-digital/go-mxl-builder", "ghcr.io/qvest-digital/go-mxl-runtime"],
       "semanticCommitType": "deps",
       "semanticCommitScope": "writer"
+    },
+    {
+      "description": "libmxl-monitoring bumps land as deps commits",
+      "matchPackageNames": ["marquies/libmxl-monitoring"],
+      "semanticCommitType": "deps",
+      "semanticCommitScope": "writer"
     }
   ],
   "customManagers": [
@@ -17,6 +23,12 @@
       "description": "Dockerfile ARG GO_MXL_TAG",
       "managerFilePatterns": ["/^Dockerfile$/"],
       "matchStrings": ["# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+ARG GO_MXL_TAG=(?<currentValue>\\S+)"]
+    },
+    {
+      "customType": "regex",
+      "description": "Dockerfile ARG MONITORING_REF",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": ["# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+ARG MONITORING_TAG=(?<currentValue>\\S+)\\s+ARG MONITORING_REF=(?<currentDigest>\\S+)"]
     }
   ]
 }
