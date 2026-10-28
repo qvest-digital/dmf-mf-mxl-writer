@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-rc.16](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.15...v1.0.0-rc.16) (2026-10-28)
+
+
+### Features
+
+* **nmos:** serve the writers' metrics from the Node on one port ([#36](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/36)) ([c75556b](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/c75556b82bfc9cece577af6ce8b6fa73c08f2aa4))
+* **testsrc:** push the writer counts over OTLP ([#38](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/38)) ([a27ccb4](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/a27ccb4ac91e1b46697beae8bc627a58b6495ac6))
+
+
+### Bug Fixes
+
+* **deps:** pin libmxl-monitoring 0.4.0 by commit ([#42](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/42)) ([bf62b6b](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/bf62b6b9e3f90600ab15d226f12e2785482dc116))
+
 ## [1.0.0-rc.15](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.14...v1.0.0-rc.15) (2026-10-28)
 
 
