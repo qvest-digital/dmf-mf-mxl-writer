@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.13](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.12...v1.0.0-rc.13) (2026-10-28)
+
+
+### Bug Fixes
+
+* **mxl-gst-testsrc:** write '/' unescaped in the flow definition ([#31](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/31)) ([7468add](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/7468addc85cc644dfae6131e9f365f84bbf7e93d))
+
 ## [1.0.0-rc.12](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.11...v1.0.0-rc.12) (2026-10-25)
 
 
