@@ -17,6 +17,26 @@ Tags follow `<git-sha>` (every build), `latest` (main only), and `<version>` on 
 rename. It keeps the tags it already holds and receives no further build; it can
 go once nothing resolves it.
 
+## Write metrics
+
+`mxl-gst-testsrc --metrics-port <port>` serves, on every interface, what each
+flow's writer calls returned, counted by
+[libmxl-monitoring](https://github.com/marquies/libmxl-monitoring):
+
+| path | answers |
+| --- | --- |
+| `/metrics` | Prometheus text, `mxl_writer_*`, one series per flow id |
+| `/healthz` | 200 while the endpoint runs |
+
+`mxl_writer_writes_total{result}` counts whole grains and committed samples as
+`ok`. A grain filled as invalid because no frame arrived in time, and silence
+written for samples that never arrived, count as `input_late`; failed opens
+and commits as `permission_error` or `other_error`, and a create that found no
+space left as `out_of_space`. `mxl_writer_open_failures_total{reason}` counts
+creates that failed: `domain`, `permission` or `other`. A port that cannot be
+bound ends the process with status 1; without the option nothing listens.
+`mxl-writer-nmos` runs one process per flow and does not take the option.
+
 ## Ring status
 
 `mxl-writer-status` serves the ring buffers of the flows the writer produces,
@@ -185,6 +205,7 @@ docker build \
   --build-arg GO_MXL_TAG=<tag> \
   --build-arg MXL_SRC=<repository URL> \
   --build-arg MXL_REF=<commit> \
+  --build-arg MONITORING_REF=<libmxl-monitoring commit> \
   --build-arg VERSION=<what mxl-writer-status reports> \
   -t dmf-mf-mxl-writer:dev .
 ```
@@ -221,8 +242,10 @@ media time, at most once per 10 s. A start that cannot put the source on the
 media time leaves its frames written at the clock and is tried again 10 s later;
 `MXL_TESTSRC_REFUSE_REALIGN` set makes it fail, for tests. A pipeline started
 again that produces nothing for 5 s, or any other error that ends a flow's
-thread, ends the process with status 1. They touch `mxl-gst-testsrc` only and
-are not upstreamed.
+thread, ends the process with status 1. 0011 records every writer call through
+libmxl-monitoring, at `MONITORING_REF`, and adds `--metrics-port` (see
+[Write metrics](#write-metrics)). They touch `mxl-gst-testsrc` only and are not
+upstreamed.
 
 To bump the stock base:
 1. Set `MXL_SRC` and `MXL_REF` to what go-mxl's `.github/libmxl.version`

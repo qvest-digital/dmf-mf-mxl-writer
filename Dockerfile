@@ -14,6 +14,13 @@ ARG GO_MXL_TAG=1.1.0-rc.7
 ARG MXL_SRC=https://github.com/qvest-digital/mxl.git
 ARG MXL_REF=c259243931333497e61faabeedac8048915dcb2b
 
+# libmxl-monitoring counts what mxl-gst-testsrc's writer calls return (patch
+# 0011); built into the same tree and linked statically. Checked out by
+# commit, which a moved tag cannot change; the tag names the release it is.
+# renovate: datasource=github-tags depName=marquies/libmxl-monitoring
+ARG MONITORING_TAG=v0.3.0
+ARG MONITORING_REF=440adb949c7c0b45f77e93216a8d3a299522714a
+
 # NvNmos, NVIDIA's C API over nmos-cpp, provides the NMOS Node mxl-writer-nmos
 # runs: IS-04 registration, the IS-05 Connection API and BCP-007-03's MXL
 # transport. Its dependencies take the better part of an hour to compile, so it
@@ -30,6 +37,7 @@ FROM ${NVNMOS_IMAGE} AS nvnmos
 FROM ghcr.io/qvest-digital/go-mxl-builder:${GO_MXL_TAG} AS build
 ARG MXL_REF
 ARG MXL_SRC
+ARG MONITORING_REF
 
 WORKDIR /src
 COPY patches/ /patches/
@@ -41,6 +49,9 @@ COPY patches/ /patches/
 RUN git clone "${MXL_SRC}" . \
  && git checkout "${MXL_REF}" \
  && git apply /patches/*.patch
+RUN git clone https://github.com/marquies/libmxl-monitoring.git libmxl-monitoring \
+ && git -C libmxl-monitoring checkout "${MONITORING_REF}" \
+ && echo 'add_subdirectory(libmxl-monitoring)' >> CMakeLists.txt
 
 # go-mxl-builder ships vcpkg with stduuid + spdlog + fmt + libfabric
 # already provisioned; reuse its toolchain rather than re-fetching.
