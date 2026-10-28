@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-rc.15](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.14...v1.0.0-rc.15) (2026-10-28)
+
+
+### Features
+
+* **nmos:** publish BCP-004-02 caps on every MXL sender ([#39](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/39)) ([4705499](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/4705499b50b55d178ddde972d9f1207c7510d56d))
+
+## [1.0.0-rc.14](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.13...v1.0.0-rc.14) (2026-10-28)
+
+
+### Features
+
+* **testsrc:** serve what the writer calls return as metrics ([#35](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/35)) ([7b26eee](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/7b26eee4a4a63739aa5f1f5f345e18f65484a64c))
+
+
+### Bug Fixes
+
+* **mxl-writer-status:** accept request headers up to 64 KiB ([#37](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/37)) ([484e5fa](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/484e5fad8ebb015538df09605012554e71d65cd9))
+* **mxl-writer-status:** write '/' unescaped in /status ([#33](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/33)) ([01b66c3](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/01b66c3854b280a17acb7aa336501b59fd3e6b69))
+
 ## [1.0.0-rc.13](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.12...v1.0.0-rc.13) (2026-10-28)
 
 

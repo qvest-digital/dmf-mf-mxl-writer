@@ -26,8 +26,12 @@
 
 namespace http
 {
-    // A request header larger than this is refused with 431.
-    constexpr std::size_t MaxRequestBytes = 8192;
+    // A request header larger than this is refused with 431. A browser
+    // sends every cookie of the parent domain along, which alone can pass
+    // 8 KiB, and a proxy in front adds its own forwarding headers. Envoy
+    // refuses a header above 60 KiB by default, so this leaves 4 KiB for
+    // what it adds; at most maxConnections buffers this size are held.
+    constexpr std::size_t MaxRequestBytes = 64 * 1024;
 
     struct Request
     {

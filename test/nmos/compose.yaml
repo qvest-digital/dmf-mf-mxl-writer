@@ -143,7 +143,8 @@ configs:
     content: |
       {"label":"lane","http_port":8010,"query_ws_port":8011,"logging_level":0,
        "href_mode":2,"host_address":"172.30.97.10","host_addresses":["172.30.97.10"],
-       "seed_id":"5b0e7c1d-2a4f-5e83-9c61-d4a7b2e8f310"}
+       "seed_id":"5b0e7c1d-2a4f-5e83-9c61-d4a7b2e8f310",
+       "query_paging_default":1000,"query_paging_limit":1000}
   testing-config:
     content: |
       from . import Config as CONFIG
