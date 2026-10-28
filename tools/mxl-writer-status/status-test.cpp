@@ -414,6 +414,10 @@ namespace
         waiting.lastErrorAt = now - 3 * status::NsPerSecond;
 
         auto const text = status::statusJson("mxl-writer-status test", {video, waiting}, now);
+        check(text.find("\"mediaType\":\"video/v210\"") != std::string::npos,
+            "/status writes the media type with a plain '/', as text-matching clients look for it");
+        check(status::jsonString("a/b \\/ \"q\" \x1f") == R"("a/b \\/ \"q\" \u001f")",
+            "every escape but \\/ is kept, and a literal backslash before '/' stays escaped");
         auto const f = flowJson(text, 0);
         check(!f.empty(), "/status is JSON with one object per flow");
         check(!f.empty() && f.at("writing").get<bool>(), "a flow written 4 ms ago is writing");
