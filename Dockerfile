@@ -18,8 +18,8 @@ ARG MXL_REF=c259243931333497e61faabeedac8048915dcb2b
 # 0011); built into the same tree and linked statically. Checked out by
 # commit, which a moved tag cannot change; the tag names the release it is.
 # renovate: datasource=github-tags depName=marquies/libmxl-monitoring
-ARG MONITORING_TAG=v0.3.0
-ARG MONITORING_REF=67d16b43d773a288c01de7a345774f2056eae950
+ARG MONITORING_TAG=v0.4.0
+ARG MONITORING_REF=8a3ec560da3773319c788fe2ecd6d838784d1557
 
 # NvNmos, NVIDIA's C API over nmos-cpp, provides the NMOS Node mxl-writer-nmos
 # runs: IS-04 registration, the IS-05 Connection API and BCP-007-03's MXL
