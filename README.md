@@ -38,6 +38,14 @@ bound ends the process with status 1; without the option nothing listens.
 `mxl-writer-nmos` takes the option too and serves the flows of all its
 processes on that one port (see [NMOS](#nmos)).
 
+With `OTEL_EXPORTER_OTLP_ENDPOINT` set, the same counts are pushed over
+OTLP/HTTP under their OTLP names (`mxl.writer.writes`, `mxl.flow.*`), and
+write failures and recoveries as log records. The standard `OTEL_*` variables
+configure it, such as `OTEL_METRIC_EXPORT_INTERVAL` and
+`OTEL_RESOURCE_ATTRIBUTES`; `service.name` is `mxl-gst-testsrc` unless they set
+one. `mxl-writer-nmos` hands its environment to its processes, so each pushes
+its own flow.
+
 ## Ring status
 
 `mxl-writer-status` serves the ring buffers of the flows the writer produces,
@@ -252,7 +260,9 @@ media time leaves its frames written at the clock and is tried again 10 s later;
 again that produces nothing for 5 s, or any other error that ends a flow's
 thread, ends the process with status 1. 0011 records every writer call through
 libmxl-monitoring, at `MONITORING_REF`, and adds `--metrics-port` (see
-[Write metrics](#write-metrics)). They touch `mxl-gst-testsrc` only and are not
+[Write metrics](#write-metrics)). 0012 pushes the same counts over OTLP when
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set, against opentelemetry-cpp, which the
+build installs through the builder image's vcpkg. They touch `mxl-gst-testsrc` only and are not
 upstreamed.
 
 To bump the stock base:

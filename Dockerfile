@@ -19,7 +19,7 @@ ARG MXL_REF=c259243931333497e61faabeedac8048915dcb2b
 # commit, which a moved tag cannot change; the tag names the release it is.
 # renovate: datasource=github-tags depName=marquies/libmxl-monitoring
 ARG MONITORING_TAG=v0.3.0
-ARG MONITORING_REF=440adb949c7c0b45f77e93216a8d3a299522714a
+ARG MONITORING_REF=67d16b43d773a288c01de7a345774f2056eae950
 
 # NvNmos, NVIDIA's C API over nmos-cpp, provides the NMOS Node mxl-writer-nmos
 # runs: IS-04 registration, the IS-05 Connection API and BCP-007-03's MXL
@@ -38,6 +38,12 @@ FROM ghcr.io/qvest-digital/go-mxl-builder:${GO_MXL_TAG} AS build
 ARG MXL_REF
 ARG MXL_SRC
 ARG MONITORING_REF
+
+# opentelemetry-cpp with its OTLP/HTTP exporter, for libmxl-monitoring's OTLP
+# exporter (patch 0012). go-mxl-builder does not carry it; installed from the
+# image's vcpkg ports in classic mode, in a layer of its own that only a new
+# GO_MXL_TAG rebuilds.
+RUN /root/vcpkg/vcpkg install "opentelemetry-cpp[otlp-http]" --x-install-root=/opt/otel
 
 WORKDIR /src
 COPY patches/ /patches/
@@ -59,6 +65,8 @@ RUN cmake -S . -B build \
         -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DMXL_ENABLE_FABRICS_OFI=ON \
+        -DMXL_MONITORING_OTLP=ON \
+        -DCMAKE_PREFIX_PATH=/opt/otel/x64-linux \
         -DCMAKE_TOOLCHAIN_FILE=/root/vcpkg/scripts/buildsystems/vcpkg.cmake \
     && cmake --build build --target mxl-gst-testsrc mxl-info -j
 
