@@ -1,0 +1,94 @@
+From e36490088089f8ba696daebdbd24f1fd0eb465f2 Mon Sep 17 00:00:00 2001
+From: marquies <me@patrickbreucking.de>
+Date: Wed, 28 Oct 2026 16:27:53 +0100
+Subject: [PATCH] feat(mxl-gst-testsrc): push the writer counts over OTLP
+
+A test source in a pod that is not scraped has no way to report what
+its writer calls return. With OTEL_EXPORTER_OTLP_ENDPOINT set, the
+libmxl-monitoring OTLP exporter pushes the same counts over OTLP/HTTP,
+configured by the standard OTEL_* variables, and a poll thread turns
+failures and recoveries into log records. Without the variable the
+process starts no exporter and no poll thread.
+---
+ tools/mxl-gst/CMakeLists.txt |  1 +
+ tools/mxl-gst/testsrc.cpp    | 38 ++++++++++++++++++++++++++++++++++++
+ 2 files changed, 39 insertions(+)
+
+diff --git a/tools/mxl-gst/CMakeLists.txt b/tools/mxl-gst/CMakeLists.txt
+index 679aa8b4..7b5a5d74 100644
+--- a/tools/mxl-gst/CMakeLists.txt
++++ b/tools/mxl-gst/CMakeLists.txt
+@@ -47,6 +47,7 @@ if (gstreamer_FOUND)
+             PRIVATE
+                 mxl
+                 mxl-monitoring::http
++                mxl-monitoring::otlp
+                 stduuid
+                 fmt::fmt
+                 picojson::picojson
+diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
+index ae94015d..bdc8a949 100644
+--- a/tools/mxl-gst/testsrc.cpp
++++ b/tools/mxl-gst/testsrc.cpp
+@@ -23,6 +23,7 @@
+ #include <gst/gstsystemclock.h>
+ #include <mxl-monitoring/http.h>
+ #include <mxl-monitoring/monitoring.h>
++#include <mxl-monitoring/otlp.h>
+ #include <mxl-monitoring/reader.h>
+ #include <mxl-monitoring/writer.h>
+ #include <picojson/wrapper.h>
+@@ -1280,6 +1281,36 @@ int main(int argc, char** argv)
+         return 1;
+     }
+ 
++    // The same counts pushed over OTLP/HTTP, with the events the poll thread
++    // raises as log records, where the standard OTEL_* variables name a
++    // collector.
++    auto otlp = mxlMonitoringOtlp{};
++    auto const* const otlpEndpoint = std::getenv("OTEL_EXPORTER_OTLP_ENDPOINT");
++    if (otlpEndpoint != nullptr && *otlpEndpoint != '\0' && ::mxlMonitoringOtlpStart(monitoring, "mxl-gst-testsrc", &otlp) != MXL_STATUS_OK)
++    {
++        MXL_ERROR("Failed to start the OTLP exporter for {}.", otlpEndpoint);
++        if (metrics != nullptr)
++        {
++            ::mxlMonitoringHttpStop(metrics);
++        }
++        ::mxlMonitoringDestroy(monitoring);
++        return 1;
++    }
++    auto polling = std::atomic<bool>{true};
++    auto poller = std::thread{};
++    if (otlp != nullptr)
++    {
++        poller = std::thread{[&]()
++            {
++                // More often than the 1 s after which a condition counts as over.
++                while (polling)
++                {
++                    ::mxlMonitoringPoll(monitoring);
++                    std::this_thread::sleep_for(std::chrono::milliseconds{100});
++                }
++            }};
++    }
++
+     ::gst_init(nullptr, nullptr);
+ 
+     auto threads = std::vector<std::thread>{};
+@@ -1381,6 +1412,13 @@ int main(int argc, char** argv)
+ 
+     ::gst_deinit();
+ 
++    if (otlp != nullptr)
++    {
++        polling = false;
++        poller.join();
++        ::mxlMonitoringPoll(monitoring);
++        ::mxlMonitoringOtlpStop(otlp);
++    }
+     if (metrics != nullptr)
+     {
+         ::mxlMonitoringHttpStop(metrics);
+-- 
+2.34.1
+
