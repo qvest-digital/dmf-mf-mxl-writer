@@ -72,7 +72,7 @@ within those 2 ms.
 | `/healthz` | 200 while the process serves |
 
 One thread serves every connection. A request is answered once its header is
-complete; a header still incomplete after 5 s is dropped, one over 8 KiB gets
+complete; a header still incomplete after 5 s is dropped, one over 64 KiB gets
 431, a malformed one 400 and any method but `GET` 405. A client that connects
 and sends nothing does not delay anybody else's request.
 
