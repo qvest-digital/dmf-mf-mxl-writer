@@ -1,0 +1,64 @@
+From ff1bb183d7f2adfda3de9bb8f6b84dfb57482bf6 Mon Sep 17 00:00:00 2001
+From: Daniel Clasen <d.clasen@qvest-digital.com>
+Date: Wed, 28 Oct 2026 03:14:07 +0100
+Subject: [PATCH] fix(mxl-gst-testsrc): write '/' unescaped in the flow
+ definition
+
+The flow definition read from the config file is re-serialized with
+picojson after its group hint is set, and picojson writes '/' as "\/".
+libmxl stores that string verbatim in flow_def.json, so its media_type
+read "video\/v210". That is valid JSON, but a reader that matches the
+file's strings as text without unescaping them does not recognise the
+flow. serializeJson now drops the backslash of that one escape and
+copies every other escape as it was.
+---
+ tools/mxl-gst/utils.hpp | 27 +++++++++++++++++++++++++--
+ 1 file changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/tools/mxl-gst/utils.hpp b/tools/mxl-gst/utils.hpp
+index 947e81f..c2c25f4 100644
+--- a/tools/mxl-gst/utils.hpp
++++ b/tools/mxl-gst/utils.hpp
+@@ -162,14 +162,37 @@ namespace json_utils
+     }
+ 
+     /**
+-     * Serialize a picojson object to a string
++     * Serialize a picojson object to a string, with '/' written as itself.
++     *
++     * picojson writes '/' as "\/". That is valid JSON, but the result is the
++     * flow definition libmxl stores verbatim in flow_def.json, and a reader
++     * that matches its strings as text without unescaping them does not find
++     * "video/v210" there.
+      *
+      * @param obj The picojson object to serialize
+      * @return The serialized JSON string
+      */
+     std::string serializeJson(picojson::object const& obj)
+     {
+-        return picojson::value{obj}.serialize();
++        auto const escaped = picojson::value{obj}.serialize();
++        auto out = std::string{};
++        out.reserve(escaped.size());
++        for (auto i = std::size_t{0}; i < escaped.size(); ++i)
++        {
++            // The character after a backslash belongs to its escape and is
++            // copied as is; only "\/" also drops the backslash.
++            if ((escaped[i] == '\\') && (i + 1 < escaped.size()))
++            {
++                if (escaped[i + 1] != '/')
++                {
++                    out += escaped[i];
++                }
++                out += escaped[++i];
++                continue;
++            }
++            out += escaped[i];
++        }
++        return out;
+     }
+ 
+ } // namespace json_utils
+-- 
+2.55.0
+

@@ -51,6 +51,14 @@ RUN cmake -S . -B build \
         -DCMAKE_TOOLCHAIN_FILE=/root/vcpkg/scripts/buildsystems/vcpkg.cmake \
     && cmake --build build --target mxl-gst-testsrc mxl-info -j
 
+# The flow definition mxl-gst-testsrc hands to libmxl, which stores it as
+# flow_def.json. The build runs the test and fails with it.
+COPY tools/mxl-gst-flowdef-test/ /src/tools/mxl-gst-flowdef-test/
+RUN echo 'add_subdirectory(mxl-gst-flowdef-test)' >> tools/CMakeLists.txt \
+    && cmake -S . -B build \
+    && cmake --build build --target mxl-gst-flowdef-test -j \
+    && build/tools/mxl-gst-flowdef-test/mxl-gst-flowdef-test
+
 # mxl-writer-status, which serves the ring state of the writer's flows, builds
 # in the same tree against the same libmxl target. It comes after the other
 # tools, so a change to it, or to the version it reports, leaves their layers
