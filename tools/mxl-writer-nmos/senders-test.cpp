@@ -6,13 +6,18 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 #include <unistd.h>
 #include "host-name.hpp"
+#include "metrics.hpp"
 #include "repeats.hpp"
 #include "senders.hpp"
+#include "server.hpp"
 
 namespace
 {
@@ -92,6 +97,121 @@ namespace
         refused({"-d", "/d"}, "a line without a flow is refused");
         refused({"-d", "/d", "-v", "/v.json", "--audio-freq", "440"}, "an audio option without an audio flow is refused");
         refused({"-d", "/d", "-a", "/a.json", "-p", "smpte"}, "a video option without a video flow is refused");
+    }
+
+    void metricsPorts()
+    {
+        auto error = std::string{};
+        auto args = Chart;
+        args.insert(args.end(), {"--metrics-port", "9103"});
+        auto const w = senders::splitArgs(args, error);
+        check(w && w->metricsPort == 9103, "the Node takes the metrics port");
+        if (!w)
+        {
+            return;
+        }
+        // The Node holds the port; a writer bound to it as well would fail,
+        // and one bound to every interface would be a second target.
+        check(has(w->video, "--metrics-port", "9104") && has(w->video, "--metrics-address", "127.0.0.1") &&
+                  has(w->audio, "--metrics-port", "9105") && has(w->audio, "--metrics-address", "127.0.0.1"),
+            "each writer serves its metrics on loopback, on a port of its own above the Node's");
+        check(!senders::splitArgs(Chart, error)->video.empty() && !hasFlag(senders::splitArgs(Chart, error)->video, "--metrics-port"),
+            "without the option no writer serves metrics");
+
+        auto const refused = [&](std::string const& port, char const* what)
+        {
+            auto e = std::string{};
+            check(!senders::splitArgs({"-d", "/d", "-v", "/v.json", "--metrics-port", port}, e) && !e.empty(), what);
+        };
+        refused("0", "port 0 is refused");
+        refused("65534", "a port without two above it for the writers is refused");
+        refused("91o3", "a port that is not a number is refused");
+        refused("", "an empty port is refused");
+        refused("-d", "an option in place of the port is refused");
+    }
+
+    void merging()
+    {
+        auto const video = std::string{
+            "# HELP mxl_writer_flow_info Media type.\n"
+            "# TYPE mxl_writer_flow_info gauge\n"
+            "mxl_writer_flow_info{flow=\"v\",media_type=\"video/v210\"} 1\n"
+            "# HELP mxl_writer_latency_seconds Commit latency.\n"
+            "# TYPE mxl_writer_latency_seconds histogram\n"
+            "mxl_writer_latency_seconds_bucket{flow=\"v\",le=\"+Inf\"} 3\n"
+            "mxl_writer_latency_seconds_sum{flow=\"v\"} 0.1\n"
+            "mxl_writer_latency_seconds_count{flow=\"v\"} 3\n"};
+        auto const audio = std::string{
+            "# HELP mxl_writer_flow_info Media type.\n"
+            "# TYPE mxl_writer_flow_info gauge\n"
+            "mxl_writer_flow_info{flow=\"a\",media_type=\"audio/float32\"} 1\n"
+            "# HELP mxl_writer_samples_total Only audio has these.\n"
+            "# TYPE mxl_writer_samples_total counter\n"
+            "mxl_writer_samples_total{flow=\"a\"} 480\n"
+            "# HELP mxl_writer_latency_seconds Commit latency.\n"
+            "# TYPE mxl_writer_latency_seconds histogram\n"
+            "mxl_writer_latency_seconds_bucket{flow=\"a\",le=\"+Inf\"} 5\n"
+            "mxl_writer_latency_seconds_sum{flow=\"a\"} 0.2\n"
+            "mxl_writer_latency_seconds_count{flow=\"a\"} 5\n"};
+        auto const merged = metrics::merge({video, audio});
+        auto const expected = std::string{
+            "# HELP mxl_writer_flow_info Media type.\n"
+            "# TYPE mxl_writer_flow_info gauge\n"
+            "mxl_writer_flow_info{flow=\"v\",media_type=\"video/v210\"} 1\n"
+            "mxl_writer_flow_info{flow=\"a\",media_type=\"audio/float32\"} 1\n"
+            "# HELP mxl_writer_latency_seconds Commit latency.\n"
+            "# TYPE mxl_writer_latency_seconds histogram\n"
+            "mxl_writer_latency_seconds_bucket{flow=\"v\",le=\"+Inf\"} 3\n"
+            "mxl_writer_latency_seconds_sum{flow=\"v\"} 0.1\n"
+            "mxl_writer_latency_seconds_count{flow=\"v\"} 3\n"
+            "mxl_writer_latency_seconds_bucket{flow=\"a\",le=\"+Inf\"} 5\n"
+            "mxl_writer_latency_seconds_sum{flow=\"a\"} 0.2\n"
+            "mxl_writer_latency_seconds_count{flow=\"a\"} 5\n"
+            "# HELP mxl_writer_samples_total Only audio has these.\n"
+            "# TYPE mxl_writer_samples_total counter\n"
+            "mxl_writer_samples_total{flow=\"a\"} 480\n"};
+        check(merged == expected, "each family is written once, with the samples of every writer, a histogram's series together");
+        if (merged != expected)
+        {
+            std::fprintf(stderr, "%s", merged.c_str());
+        }
+        check(metrics::merge({video}) == video, "one writer's metrics pass unchanged");
+        check(metrics::merge({}).empty(), "no writer running leaves an empty exposition");
+    }
+
+    void fetching()
+    {
+        auto server = http::Server{};
+        server.route = [](std::string const& path)
+        {
+            return path == "/metrics" ? http::Response{.body = "m 1\n"} : http::Response{.code = 404, .body = "no\n"};
+        };
+        auto const port = server.listen(0, true);
+        check(port.has_value(), "a loopback server for the fetch starts");
+        if (!port)
+        {
+            return;
+        }
+        auto stop = std::atomic<bool>{false};
+        auto thread = std::thread{[&] { server.run(stop); }};
+        check(metrics::fetch(*port, std::chrono::milliseconds{1000}) == std::optional<std::string>{"m 1\n"},
+            "a writer's metrics are fetched");
+        stop = true;
+        thread.join();
+        check(!metrics::fetch(*port, std::chrono::milliseconds{1000}), "a writer that is not running is left out");
+
+        // A writer that accepts and never answers, as a stopped (SIGSTOP)
+        // process does, costs the scrape its timeout and no more.
+        auto silent = http::Server{};
+        auto const silentPort = silent.listen(0, true);
+        check(silentPort.has_value(), "a silent loopback listener starts");
+        if (silentPort)
+        {
+            auto const start = std::chrono::steady_clock::now();
+            check(!metrics::fetch(*silentPort, std::chrono::milliseconds{200}), "a writer that does not answer is left out");
+            check(std::chrono::steady_clock::now() - start < std::chrono::milliseconds{1000}, "it is given up on at the timeout");
+            ::close(silent.listener);
+        }
     }
 
     void uuids()
@@ -322,6 +442,9 @@ int main()
     hostNames();
     repeating();
     splitting();
+    metricsPorts();
+    merging();
+    fetching();
     uuids();
     domains();
     definitions();

@@ -6,7 +6,9 @@
 #pragma once
 
 #include <cstdio>
+#include <algorithm>
 #include <fstream>
+#include <iterator>
 #include <filesystem>
 #include <optional>
 #include <sstream>
@@ -56,18 +58,25 @@ namespace senders
         std::string groupHint = "mxl-gst-testsrc-group";
         std::string videoDefinition;
         std::string audioDefinition;
+        // The port the Node serves the writers' metrics on, 0 for none. Each
+        // writer serves its own on loopback, video one port above it and
+        // audio two, where the Node collects them.
+        unsigned int metricsPort = 0;
         // Arguments after the binary, one list per flow; empty where the
         // flow is not written.
         std::vector<std::string> video;
         std::vector<std::string> audio;
     };
 
-    // Every option mxl-gst-testsrc takes, all of them with a value.
+    // Every option mxl-gst-testsrc takes, all of them with a value, and
+    // where it goes. A Node option is the Node's own and reaches no writer as
+    // given.
     enum class Scope
     {
         Common,
         Video,
         Audio,
+        Node,
     };
 
     struct Option
@@ -91,6 +100,7 @@ namespace senders
         {nullptr, "--audio-wave", Scope::Audio},
         {nullptr, "--audio-freq", Scope::Audio},
         {nullptr, "--audio-volume", Scope::Audio},
+        {nullptr, "--metrics-port", Scope::Node},
     };
 
     inline Option const* findOption(std::string const& arg)
@@ -146,6 +156,26 @@ namespace senders
             {
                 writers.audioDefinition = value;
             }
+            else if (name == "--metrics-port")
+            {
+                auto port = 0UL;
+                for (auto const c : value)
+                {
+                    if (c < '0' || c > '9' || (port = port * 10 + static_cast<unsigned long>(c - '0')) > 65533)
+                    {
+                        port = 0;
+                        break;
+                    }
+                }
+                // The writers take the two ports above it.
+                if (port == 0)
+                {
+                    error = "--metrics-port '" + value + "' is not a port from 1 to 65533";
+                    return std::nullopt;
+                }
+                writers.metricsPort = static_cast<unsigned int>(port);
+                continue;
+            }
             auto& into = option->scope == Scope::Common ? common : option->scope == Scope::Video ? video : audio;
             into.push_back(args[i]);
             into.push_back(value);
@@ -172,15 +202,23 @@ namespace senders
             error = audio.front() + " is given without -a";
             return std::nullopt;
         }
+        auto metrics = [&](unsigned int offset)
+        {
+            return writers.metricsPort == 0
+                     ? std::vector<std::string>{}
+                     : std::vector<std::string>{"--metrics-address", "127.0.0.1", "--metrics-port", std::to_string(writers.metricsPort + offset)};
+        };
         if (!writers.videoDefinition.empty())
         {
             writers.video = common;
             writers.video.insert(writers.video.end(), video.begin(), video.end());
+            std::ranges::copy(metrics(1), std::back_inserter(writers.video));
         }
         if (!writers.audioDefinition.empty())
         {
             writers.audio = common;
             writers.audio.insert(writers.audio.end(), audio.begin(), audio.end());
+            std::ranges::copy(metrics(2), std::back_inserter(writers.audio));
         }
         return writers;
     }
