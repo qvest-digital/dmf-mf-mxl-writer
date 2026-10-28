@@ -423,9 +423,30 @@ namespace status
         return (static_cast<double>(later) - static_cast<double>(earlier)) / 1e9;
     }
 
+    // A JSON string literal with '/' written as itself. picojson writes it as
+    // "\/", which is valid JSON, but a client that matches the body's
+    // strings as text does not find "video/v210" there.
     inline std::string jsonString(std::string const& value)
     {
-        return picojson::value{value}.serialize();
+        auto const escaped = picojson::value{value}.serialize();
+        auto out = std::string{};
+        out.reserve(escaped.size());
+        for (auto i = std::size_t{0}; i < escaped.size(); ++i)
+        {
+            // The character after a backslash belongs to its escape and is
+            // copied as is; only "\/" also drops the backslash.
+            if ((escaped[i] == '\\') && (i + 1 < escaped.size()))
+            {
+                if (escaped[i + 1] != '/')
+                {
+                    out += escaped[i];
+                }
+                out += escaped[++i];
+                continue;
+            }
+            out += escaped[i];
+        }
+        return out;
     }
 
     inline std::string jsonNumber(std::optional<double> value, int decimals)
