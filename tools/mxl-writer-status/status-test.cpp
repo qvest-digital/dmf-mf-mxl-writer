@@ -235,6 +235,23 @@ namespace
             "a flow whose file could not be read before it opened is reopened once its file is there, so a replacement in between is not missed");
     }
 
+    // A browser's request header carrying cookies of about bytes in all, in
+    // pieces of the size a session or tracking cookie has, and the
+    // forwarding headers a proxy in front adds.
+    std::string browserRequest(std::string_view path, std::size_t bytes)
+    {
+        auto request = fmt::format("GET {} HTTP/1.1\r\nHost: x\r\nUser-Agent: Mozilla/5.0\r\n"
+                                   "X-Forwarded-For: 192.0.2.1\r\nX-Request-Id: 9b2d6f0e-0d3c-4f1a-8e5b-6a7c8d9e0f12\r\nCookie: ",
+            path);
+        for (auto i = 0; bytes > 0; ++i)
+        {
+            auto const value = std::min<std::size_t>(bytes, 400);
+            request += fmt::format("{}c{}={}", i == 0 ? "" : "; ", i, std::string(value, 'v'));
+            bytes -= value;
+        }
+        return request + "\r\n\r\n";
+    }
+
     void requests()
     {
         using Outcome = http::Request::Outcome;
@@ -247,6 +264,10 @@ namespace
             "a header that never ends within the cap is refused");
         check(http::parseRequest("GET / HTTP/1.1\r\nX: " + std::string(http::MaxRequestBytes, 'a') + "\r\n\r\n").outcome == Outcome::TooLarge,
             "and so is one that ends past it");
+        check(http::parseRequest(browserRequest("/", 24 * 1024)).outcome == Outcome::Complete,
+            "a browser sending 24 KiB of cookies of the parent domain is served");
+        check(http::parseRequest(browserRequest("/", 60 * 1024)).outcome == Outcome::Complete,
+            "and so is one at the 60 KiB Envoy forwards by default");
         check(http::parseRequest("GET\r\n\r\n").outcome == Outcome::Bad, "a request line without a target is bad");
         check(http::parseRequest("GET status HTTP/1.1\r\n\r\n").outcome == Outcome::Bad, "a target must be a path");
         check(http::parseRequest("GET / SPDY/3\r\n\r\n").outcome == Outcome::Bad, "only HTTP/1 is served");
@@ -360,6 +381,8 @@ namespace
             "a request sent in pieces is served once its header ends");
         check(exchange(*port, {"GET / HTTP/1.1\r\nX: " + std::string(http::MaxRequestBytes, 'a')}).starts_with("HTTP/1.1 431 "),
             "a header past the cap is refused with 431");
+        check(exchange(*port, {browserRequest("/healthz", 24 * 1024)}).starts_with("HTTP/1.1 200 OK\r\n"),
+            "a request with 24 KiB of cookies is answered");
         check(exchange(*port, {"nonsense\r\n\r\n"}).starts_with("HTTP/1.1 400 "), "a malformed request line gets 400");
         check(exchange(*port, {"POST /healthz HTTP/1.1\r\n\r\n"}).starts_with("HTTP/1.1 405 "), "anything but GET gets 405");
         check(exchange(*port, {"GET /nope HTTP/1.1\r\n\r\n"}).starts_with("HTTP/1.1 404 "), "an unknown path gets 404");
