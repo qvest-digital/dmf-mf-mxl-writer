@@ -1,4 +1,4 @@
-From 8660cea244a57ab7cb0dfc0cdcee981cff6005da Mon Sep 17 00:00:00 2001
+From 7c8dc2df0ce03c0a5eee9a1ed77b7de60a717b96 Mon Sep 17 00:00:00 2001
 From: marquies <me@patrickbreucking.de>
 Date: Wed, 28 Oct 2026 00:09:28 +0100
 Subject: [PATCH] feat(mxl-gst-testsrc): report what each flow's writer calls
@@ -14,13 +14,14 @@ libmxl-monitoring writer wrappers, which count whole grains and
 committed samples as ok and every failure by its cause. A grain the
 gap filler marks invalid and a silence range written for samples that
 never arrived count as input_late. --metrics-port serves the counts as
-Prometheus text at /metrics, with /healthz, from a thread of its own;
-a port that cannot be bound ends the process with status 1. Without
-the option nothing listens.
+Prometheus text at /metrics, with /healthz, from a thread of its own,
+on every interface or on --metrics-address; a port that cannot be
+bound ends the process with status 1. Without the option nothing
+listens.
 ---
  tools/mxl-gst/CMakeLists.txt |  1 +
- tools/mxl-gst/testsrc.cpp    | 80 ++++++++++++++++++++++++++++--------
- 2 files changed, 64 insertions(+), 17 deletions(-)
+ tools/mxl-gst/testsrc.cpp    | 84 ++++++++++++++++++++++++++++--------
+ 2 files changed, 68 insertions(+), 17 deletions(-)
 
 diff --git a/tools/mxl-gst/CMakeLists.txt b/tools/mxl-gst/CMakeLists.txt
 index 7bf0bb5..679aa8b 100644
@@ -35,7 +36,7 @@ index 7bf0bb5..679aa8b 100644
                  fmt::fmt
                  picojson::picojson
 diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
-index 61a907d..44b0548 100644
+index 61a907d..ae94015 100644
 --- a/tools/mxl-gst/testsrc.cpp
 +++ b/tools/mxl-gst/testsrc.cpp
 @@ -2,6 +2,7 @@
@@ -192,13 +193,16 @@ index 61a907d..44b0548 100644
          mxlInstance _instance;
  
          mxlFlowWriter _writer;
-@@ -1236,8 +1255,27 @@ int main(int argc, char** argv)
+@@ -1236,8 +1255,31 @@ int main(int argc, char** argv)
      auto groupHintOpt = app.add_option("-g, --group-hint", groupHint, "The group-hint value to use in the flow json definition");
      groupHintOpt->default_val("mxl-gst-testsrc-group");
  
 +    auto metricsPort = std::uint16_t{};
-+    auto metricsPortOpt = app.add_option("--metrics-port", metricsPort, "Port to serve /metrics and /healthz on, every interface; none without it");
++    auto metricsPortOpt = app.add_option("--metrics-port", metricsPort, "Port to serve /metrics and /healthz on; none without it");
 +    metricsPortOpt->check(CLI::Range(1, 65535));
++
++    auto metricsAddress = std::string{};
++    app.add_option("--metrics-address", metricsAddress, "Address to serve the metrics on; every interface without it")->needs(metricsPortOpt);
 +
      CLI11_PARSE(app, argc, argv);
  
@@ -210,9 +214,10 @@ index 61a907d..44b0548 100644
 +        return 1;
 +    }
 +    auto metrics = mxlMonitoringHttp{};
-+    if (metricsPortOpt->count() > 0 && ::mxlMonitoringHttpStart(monitoring, nullptr, metricsPort, &metrics) != MXL_STATUS_OK)
++    if (metricsPortOpt->count() > 0 &&
++        ::mxlMonitoringHttpStart(monitoring, metricsAddress.empty() ? nullptr : metricsAddress.c_str(), metricsPort, &metrics) != MXL_STATUS_OK)
 +    {
-+        MXL_ERROR("Failed to serve metrics on port {}: {}", metricsPort, std::strerror(errno));
++        MXL_ERROR("Failed to serve metrics on {}:{}: {}", metricsAddress.empty() ? "*" : metricsAddress, metricsPort, std::strerror(errno));
 +        ::mxlMonitoringDestroy(monitoring);
 +        return 1;
 +    }
@@ -220,7 +225,7 @@ index 61a907d..44b0548 100644
      ::gst_init(nullptr, nullptr);
  
      auto threads = std::vector<std::thread>{};
-@@ -1257,7 +1295,8 @@ int main(int argc, char** argv)
+@@ -1257,7 +1299,8 @@ int main(int argc, char** argv)
                      }
  
                      json_utils::updateGroupHint(flowNmos, groupHint, "video");
@@ -230,7 +235,7 @@ index 61a907d..44b0548 100644
                      auto const frameWidth = static_cast<std::uint64_t>(json_utils::getField<double>(flowNmos, "frame_width"));
                      auto const frameHeight = static_cast<std::uint64_t>(json_utils::getField<double>(flowNmos, "frame_height"));
                      if (mxlWriter.maxCommitBatchSizeHint() > frameHeight)
-@@ -1302,7 +1341,8 @@ int main(int argc, char** argv)
+@@ -1302,7 +1345,8 @@ int main(int argc, char** argv)
                      auto const flowOptions = !audioFlowOptionFile.empty() ? readFile(audioFlowOptionFile) : std::string{};
                      json_utils::updateGroupHint(flowNmos, groupHint, "audio");
  
@@ -240,7 +245,7 @@ index 61a907d..44b0548 100644
  
                      auto const gstConfig = AudioPipelineConfig{
                          .sampleRate = json_utils::getRational(flowNmos, "sample_rate"),
-@@ -1337,5 +1377,11 @@ int main(int argc, char** argv)
+@@ -1337,5 +1381,11 @@ int main(int argc, char** argv)
  
      ::gst_deinit();
  

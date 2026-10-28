@@ -5,7 +5,8 @@
 // over IS-04 and serves an IS-05 Connection API with one BCP-007-03 MXL Sender
 // per flow, through NvNmos. An activation that clears master_enable stops that
 // flow's process, which releases the flow; one that sets it starts the process
-// again. Every Sender starts active.
+// again. Every Sender starts active. With --metrics-port the Node serves the
+// writers' metrics, collected from each of them, on that one port.
 
 #include <cerrno>
 #include <csignal>
@@ -27,8 +28,10 @@
 #include <unistd.h>
 #include <nvnmos.h>
 #include "host-name.hpp"
+#include "metrics.hpp"
 #include "repeats.hpp"
 #include "senders.hpp"
+#include "server.hpp"
 
 extern char** environ;
 
@@ -422,6 +425,50 @@ int main(int argc, char** argv)
     }
     node.hostName = *hostName;
 
+    // A stopped writer leaves its flow out of the scrape rather than the
+    // target down. Collected on the server's thread, from the ports the
+    // writers were given, so nothing here is shared with the main loop.
+    auto metricsServer = http::Server{};
+    auto metricsStop = std::atomic<bool>{false};
+    auto metricsThread = std::thread{};
+    if (split->metricsPort != 0)
+    {
+        auto ports = std::vector<std::uint16_t>{};
+        for (auto const& [args, offset] : {std::pair{&split->video, 1U}, std::pair{&split->audio, 2U}})
+        {
+            if (!args->empty())
+            {
+                ports.push_back(static_cast<std::uint16_t>(split->metricsPort + offset));
+            }
+        }
+        metricsServer.route = [ports](std::string const& path)
+        {
+            if (path == "/healthz")
+            {
+                return http::Response{.body = "ok\n"};
+            }
+            if (path != "/metrics")
+            {
+                return http::Response{.code = 404, .body = "not found\n"};
+            }
+            auto texts = std::vector<std::string>{};
+            for (auto const port : ports)
+            {
+                if (auto text = metrics::fetch(port, std::chrono::milliseconds{500}))
+                {
+                    texts.push_back(std::move(*text));
+                }
+            }
+            return http::Response{.type = "text/plain; version=0.0.4; charset=utf-8", .body = metrics::merge(texts)};
+        };
+        if (!metricsServer.listen(static_cast<std::uint16_t>(split->metricsPort)))
+        {
+            log("cannot serve metrics on port %u: %s", split->metricsPort, std::strerror(errno));
+            return 1;
+        }
+        metricsThread = std::thread{[&] { metricsServer.run(metricsStop); }};
+    }
+
     // The flows are written whether or not the Node is up yet, as without
     // NMOS.
     auto failed = false;
@@ -495,5 +542,10 @@ int main(int argc, char** argv)
         all.push_back(writer.get());
     }
     stop(all);
+    if (metricsThread.joinable())
+    {
+        metricsStop = true;
+        metricsThread.join();
+    }
     return failed ? 1 : 0;
 }

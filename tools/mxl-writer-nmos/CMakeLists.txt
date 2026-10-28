@@ -17,21 +17,31 @@ set(NVNMOS_ROOT "/opt/nvnmos" CACHE PATH "Where NvNmos is installed")
 find_path(NVNMOS_INCLUDE_DIR nvnmos.h HINTS ${NVNMOS_ROOT}/include REQUIRED)
 find_library(NVNMOS_LIBRARY nvnmos HINTS ${NVNMOS_ROOT}/lib REQUIRED)
 
+if (NOT TARGET fmt::fmt)
+    find_package(fmt CONFIG REQUIRED)
+endif ()
+find_package(Threads REQUIRED)
+# The metrics endpoint is mxl-writer-status's HTTP server, which the image
+# build puts beside this directory.
+set(STATUS_SERVER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../mxl-writer-status)
+
 add_executable(mxl-writer-nmos)
 target_compile_features(mxl-writer-nmos PRIVATE cxx_std_20)
 target_sources(mxl-writer-nmos PRIVATE mxl-writer-nmos.cpp)
-target_include_directories(mxl-writer-nmos PRIVATE ${NVNMOS_INCLUDE_DIR} ${PICOJSON_HEADERS})
+target_include_directories(mxl-writer-nmos PRIVATE ${NVNMOS_INCLUDE_DIR} ${PICOJSON_HEADERS} ${STATUS_SERVER_DIR})
 target_link_libraries(mxl-writer-nmos
         PRIVATE
             picojson::picojson
+            fmt::fmt
+            Threads::Threads
             ${NVNMOS_LIBRARY}
     )
 
 add_executable(mxl-writer-nmos-tests)
 target_compile_features(mxl-writer-nmos-tests PRIVATE cxx_std_20)
 target_sources(mxl-writer-nmos-tests PRIVATE senders-test.cpp)
-target_include_directories(mxl-writer-nmos-tests PRIVATE ${PICOJSON_HEADERS})
-target_link_libraries(mxl-writer-nmos-tests PRIVATE picojson::picojson)
+target_include_directories(mxl-writer-nmos-tests PRIVATE ${PICOJSON_HEADERS} ${STATUS_SERVER_DIR})
+target_link_libraries(mxl-writer-nmos-tests PRIVATE picojson::picojson fmt::fmt Threads::Threads)
 
 # The conformance lane's reader of the flows, test/nmos/phase-probe.cpp,
 # where the image build copies it in. Built in the build stage only.

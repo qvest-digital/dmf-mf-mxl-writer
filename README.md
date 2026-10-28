@@ -19,8 +19,8 @@ go once nothing resolves it.
 
 ## Write metrics
 
-`mxl-gst-testsrc --metrics-port <port>` serves, on every interface, what each
-flow's writer calls returned, counted by
+`mxl-gst-testsrc --metrics-port <port>` serves, on every interface or on
+`--metrics-address`, what each flow's writer calls returned, counted by
 [libmxl-monitoring](https://github.com/marquies/libmxl-monitoring):
 
 | path | answers |
@@ -35,7 +35,8 @@ and commits as `permission_error` or `other_error`, and a create that found no
 space left as `out_of_space`. `mxl_writer_open_failures_total{reason}` counts
 creates that failed: `domain`, `permission` or `other`. A port that cannot be
 bound ends the process with status 1; without the option nothing listens.
-`mxl-writer-nmos` runs one process per flow and does not take the option.
+`mxl-writer-nmos` takes the option too and serves the flows of all its
+processes on that one port (see [NMOS](#nmos)).
 
 ## Ring status
 
@@ -108,7 +109,7 @@ through NvNmos. It takes `mxl-gst-testsrc`'s own command line in place of the
 entrypoint, and its configuration from the environment:
 
 ```
-mxl-writer-nmos -d <domain> [-v <video flow json> ...] [-a <audio flow json> ...] [-g <group>]
+mxl-writer-nmos -d <domain> [-v <video flow json> ...] [-a <audio flow json> ...] [-g <group>] [--metrics-port <port>]
 ```
 
 | Variable | Default | Description |
@@ -161,6 +162,13 @@ names them changes nothing, and any other value is refused with 400.
   is active again.
 - A process that exits while its Sender is active stops the Node with status 1,
   so the container restarts rather than advertise a flow nobody writes.
+- With `--metrics-port <port>` the Node serves `/metrics` and `/healthz` on
+  that port, on every interface. Each process serves its own flow's metrics
+  on loopback, video on the port above it and audio two above, and every
+  scrape of the Node collects them, 500 ms each at most, into one Prometheus
+  text. A process that is stopped or does not answer leaves its flow out of
+  that scrape; the Node's port stays up. A port above 65533 exits with status
+  2, one that cannot be bound with status 1.
 - `SIGTERM` stops the Node and then every process, against one 10 s
   deadline after which a process still running is killed. As the container's
   PID 1 it also reaps any process a writer leaves behind.
