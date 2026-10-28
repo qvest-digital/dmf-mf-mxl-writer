@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.15](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.14...v1.0.0-rc.15) (2026-10-28)
+
+
+### Features
+
+* **nmos:** publish BCP-004-02 caps on every MXL sender ([#39](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/39)) ([4705499](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/4705499b50b55d178ddde972d9f1207c7510d56d))
+
 ## [1.0.0-rc.14](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.13...v1.0.0-rc.14) (2026-10-28)
 
 
