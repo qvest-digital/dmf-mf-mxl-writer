@@ -78,6 +78,14 @@ RUN echo 'add_subdirectory(mxl-gst-flowdef-test)' >> tools/CMakeLists.txt \
     && cmake --build build --target mxl-gst-flowdef-test -j \
     && build/tools/mxl-gst-flowdef-test/mxl-gst-flowdef-test
 
+# The faults mxl-gst-testsrc writes on command (patch 0013). The build runs the
+# test and fails with it.
+COPY tools/mxl-gst-faults-test/ /src/tools/mxl-gst-faults-test/
+RUN echo 'add_subdirectory(mxl-gst-faults-test)' >> tools/CMakeLists.txt \
+    && cmake -S . -B build \
+    && cmake --build build --target mxl-gst-faults-test -j \
+    && build/tools/mxl-gst-faults-test/mxl-gst-faults-test
+
 # mxl-writer-status, which serves the ring state of the writer's flows, builds
 # in the same tree against the same libmxl target. It comes after the other
 # tools, so a change to it, or to the version it reports, leaves their layers

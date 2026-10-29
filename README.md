@@ -46,6 +46,31 @@ configure it, such as `OTEL_METRIC_EXPORT_INTERVAL` and
 one. `mxl-writer-nmos` hands its environment to its processes, so each pushes
 its own flow.
 
+## Faults on command
+
+With `MXL_TESTSRC_FAULTS` naming a directory, `mxl-gst-testsrc` writes faults
+into its flows on command, so a reader's checks can be shown at work on real
+media. Each flow takes commands, one per line, from the FIFO
+`<directory>/<flow id>`, which the process creates and removes:
+
+| Command | The flow gets | A libmxl-monitoring reader counts |
+|---|---|---|
+| `invalid N` | the next N grains flagged invalid, without payload | `invalid` |
+| `partial N` | the next N grains committed with half their slices | `invalid`, as libmxl marks a part-written grain |
+| `illegal N` | the next N grains carrying v210 code 0 throughout | `illegal_values` with legal checks on |
+| `size N` | the next N grains claiming one line fewer than they have | `wrong_size` |
+| `pause S` | no writing for S seconds, at most 3600 | `too_early` and stalls; for video the gap after it as `invalid` |
+
+An audio flow takes `pause` only; a command a flow does not take is logged as
+refused. The directory must exist. `mxl-writer-nmos` hands its environment to
+its processes, so each takes its own flow's commands:
+
+```
+echo 'invalid 5' > /run/faults/<video flow id>
+```
+
+Without the variable nothing listens and every grain is written as before.
+
 ## Ring status
 
 `mxl-writer-status` serves the ring buffers of the flows the writer produces,
@@ -262,7 +287,8 @@ thread, ends the process with status 1. 0011 records every writer call through
 libmxl-monitoring, at `MONITORING_REF`, and adds `--metrics-port` (see
 [Write metrics](#write-metrics)). 0012 pushes the same counts over OTLP when
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set, against opentelemetry-cpp, which the
-build installs through the builder image's vcpkg. They touch `mxl-gst-testsrc` only and are not
+build installs through the builder image's vcpkg. 0013 writes faults into a
+flow on command (see [Faults on command](#faults-on-command)). They touch `mxl-gst-testsrc` only and are not
 upstreamed.
 
 To bump the stock base:
