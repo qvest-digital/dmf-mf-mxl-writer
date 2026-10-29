@@ -131,12 +131,14 @@ mxl-writer-nmos -d <domain> [-v <video flow json> ...] [-a <audio flow json> ...
 | `NMOS_SYSTEM_HOST` / `NMOS_SYSTEM_PORT` | *(the registry's)* | A fixed IS-09 System API. nmos-cpp serves it beside the registry |
 | `NMOS_DNS_DOMAIN` | *(the host name's domain, else the library default)* | DNS-SD domain to browse for a registry where none is fixed |
 | `NMOS_LABEL` / `NMOS_DESCRIPTION` | `MXL test writer` / `Test patterns written into MXL flows` | Node and Device label and description. A Sender is labelled `<label> video` or `<label> audio` |
+| `NMOS_CONTROL_PORT` | *(unset -- no IS-12)* | Port of an IS-12 Control Protocol websocket with an AMWA BCP-008 monitor per Sender. Needs `--metrics-port` |
 
 Only the `-x value` and `--name value` forms are taken. An option the test
 source does not take, an option without its value, a video option without
 `-v` or an audio option without `-a` exits with status 2, as does a flow id that
 is not a lowercase UUID, a missing `NMOS_HOST_ADDRESS` or `NMOS_SEED`, or no
-host name from `NMOS_HOST_NAME` or `NMOS_POD_NAMESPACE`.
+host name from `NMOS_HOST_NAME` or `NMOS_POD_NAMESPACE`, or `NMOS_CONTROL_PORT`
+without `--metrics-port`.
 
 | Sender | Flow | Format |
 |---|---|---|
@@ -177,6 +179,21 @@ names them changes nothing, and any other value is refused with 400.
   text. A process that is stopped or does not answer leaves its flow out of
   that scrape; the Node's port stays up. A port above 65533 exits with status
   2, one that cannot be bound with status 1.
+- With `NMOS_CONTROL_PORT` the Device advertises IS-12 on that port, with an
+  `NcSenderMonitor` (BCP-008-02) per Sender in a `sender-monitors` block,
+  linked to its Sender by a touchpoint. A monitor is active while its Sender
+  is. Once a second the Node reads each active Sender's process metrics and
+  reports:
+
+  | Status | From the writer |
+  |---|---|
+  | link | all up, or all down while the flow's state is `domain_unavailable` |
+  | transmission | healthy while commits land within a second, unhealthy otherwise or while the process does not answer |
+  | external synchronization | not used: the writer observes no external clock |
+  | essence | unhealthy after input written as invalid since the last poll, partially healthy after input written late, healthy otherwise |
+
+  `GetTransmissionErrorCounters` answers every `mxl_writer_writes_total` result
+  but `ok`, counted since the last `ResetCounters`.
 - `SIGTERM` stops the Node and then every process, against one 10 s
   deadline after which a process still running is killed. As the container's
   PID 1 it also reaps any process a writer leaves behind.

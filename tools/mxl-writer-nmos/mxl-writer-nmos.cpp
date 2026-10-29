@@ -6,7 +6,9 @@
 // per flow, through NvNmos. An activation that clears master_enable stops that
 // flow's process, which releases the flow; one that sets it starts the process
 // again. Every Sender starts active. With --metrics-port the Node serves the
-// writers' metrics, collected from each of them, on that one port.
+// writers' metrics, collected from each of them, on that one port; with
+// NMOS_CONTROL_PORT as well, it serves IS-12 there with a BCP-008 monitor per
+// Sender, whose statuses and counters come from the same metrics.
 
 #include <cerrno>
 #include <csignal>
@@ -29,6 +31,7 @@
 #include <nvnmos.h>
 #include "host-name.hpp"
 #include "metrics.hpp"
+#include "monitors.hpp"
 #include "repeats.hpp"
 #include "senders.hpp"
 #include "server.hpp"
@@ -85,9 +88,19 @@ namespace
         // itself is started and stopped by the main loop.
         std::atomic<bool> wanted{true};
         pid_t pid = 0;
+        // The loopback port the writer serves its metrics on, 0 without
+        // --metrics-port.
+        unsigned int metricsPort = 0;
+        // The monitor's view of the writer: the sample of the last poll and
+        // the one of its last counter reset. Polled by the main loop, read by
+        // the IS-12 callbacks.
+        std::mutex monitorMutex;
+        std::optional<monitors::Sample> latest;
+        monitors::Sample baseline;
     };
 
     std::vector<std::unique_ptr<Writer>> writers;
+    unsigned int controlPort = 0;
     std::string domain;
     std::string domainId;
     std::string groupHint;
@@ -128,6 +141,60 @@ namespace
         }
         log("activation for unknown %s %s", side == NVNMOS_SIDE_SENDER ? "sender" : "receiver", name);
         return false;
+    }
+
+    Writer* findWriter(NvNmosSide side, char const* name)
+    {
+        for (auto& writer : writers)
+        {
+            if (side == NVNMOS_SIDE_SENDER && name != nullptr && writer->flow.name == name)
+            {
+                return writer.get();
+            }
+        }
+        return nullptr;
+    }
+
+    // NvNmos calls these on an IS-12 thread holding its model lock, so they
+    // read only what the last poll left.
+    std::size_t onCounters(NvNmosNodeServer*, NvNmosSide side, char const* name, NvNmosMonitorCounters which, NvNmosMonitorCounter* counters,
+        std::size_t maxCounters)
+    {
+        auto* writer = findWriter(side, name);
+        if (writer == nullptr || which != NVNMOS_MONITOR_COUNTERS_TRANSMISSION_ERROR)
+        {
+            return 0;
+        }
+        // NvNmos copies the names before this thread calls again.
+        thread_local auto names = std::vector<std::string>{};
+        auto values = std::vector<std::pair<std::string, std::uint64_t>>{};
+        {
+            auto const lock = std::lock_guard{writer->monitorMutex};
+            if (writer->latest)
+            {
+                values = monitors::errorCounters(*writer->latest, writer->baseline);
+            }
+        }
+        names.clear();
+        for (auto const& value : values)
+        {
+            names.push_back(value.first);
+        }
+        auto const count = std::min(values.size(), maxCounters);
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            counters[i] = NvNmosMonitorCounter{.name = names[i].c_str(), .value = values[i].second, .description = nullptr};
+        }
+        return count;
+    }
+
+    void onReset(NvNmosNodeServer*, NvNmosSide side, char const* name)
+    {
+        if (auto* writer = findWriter(side, name))
+        {
+            auto const lock = std::lock_guard{writer->monitorMutex};
+            writer->baseline = writer->latest.value_or(monitors::Sample{});
+        }
     }
 
     // NvNmos repeats a failure to find or reach a registry several times a
@@ -324,7 +391,12 @@ namespace
         config.log_level = NVNMOS_LOG_WARNING;
         config.network_services = &services;
 
-        if (!create_nmos_node_server(&config, &node.server))
+        auto control = NvNmosControlProtocolConfig{};
+        control.port = controlPort;
+        control.get_counters = &onCounters;
+        control.reset_counters = &onReset;
+        if (!(controlPort != 0 ? create_nmos_node_server_with_control_protocol(&config, &control, &node.server)
+                               : create_nmos_node_server(&config, &node.server)))
         {
             error = "the NMOS Node server did not start";
             return false;
@@ -342,7 +414,48 @@ namespace
         }
         log("node up at %s:%u, %zu sender(s) in domain %s (%s)", node.hostAddress.c_str(), node.httpPort, writers.size(), domainId.c_str(),
             domain.c_str());
+        if (controlPort != 0)
+        {
+            log("IS-12 with a BCP-008 monitor per sender at %s:%u", node.hostAddress.c_str(), controlPort);
+        }
         return true;
+    }
+
+    // Reports every active Sender's statuses from what its writer serves; a
+    // Sender deactivated over IS-05 has its monitor inactive already.
+    void pollMonitors(Node& node)
+    {
+        for (auto& writer : writers)
+        {
+            if (!writer->wanted)
+            {
+                continue;
+            }
+            auto const text = metrics::fetch(static_cast<std::uint16_t>(writer->metricsPort), std::chrono::milliseconds{500});
+            auto const sample = text ? monitors::parse(*text, writer->flow.flowId) : std::nullopt;
+            auto previous = std::optional<monitors::Sample>{};
+            {
+                auto const lock = std::lock_guard{writer->monitorMutex};
+                previous = writer->latest;
+                if (sample)
+                {
+                    writer->latest = sample;
+                }
+            }
+            auto const report = monitors::report(previous, sample);
+            auto set = [&](NvNmosMonitorDomain domain, std::optional<monitors::Status> const& status)
+            {
+                if (status && !nmos_monitor_set_status(&node.server, NVNMOS_SIDE_SENDER, writer->flow.name.c_str(), domain, status->value,
+                                  status->message.c_str()))
+                {
+                    log("could not report the %s sender's monitor status", writer->flow.name.c_str());
+                }
+            };
+            set(NVNMOS_MONITOR_DOMAIN_LINK, report.link);
+            set(NVNMOS_MONITOR_DOMAIN_CONNECTION, report.transmission);
+            set(NVNMOS_MONITOR_DOMAIN_SYNCHRONIZATION, report.synchronization);
+            set(NVNMOS_MONITOR_DOMAIN_STREAM, report.essence);
+        }
     }
 
 }
@@ -377,6 +490,10 @@ int main(int argc, char** argv)
         auto writer = std::make_unique<Writer>();
         writer->flow = std::move(*flow);
         writer->args = args;
+        if (split->metricsPort != 0)
+        {
+            writer->metricsPort = split->metricsPort + (writer->flow.name == "video" ? 1U : 2U);
+        }
         writers.push_back(std::move(writer));
     }
 
@@ -386,6 +503,22 @@ int main(int argc, char** argv)
     node.label = env("NMOS_LABEL", "MXL test writer");
     node.description = env("NMOS_DESCRIPTION", "Test patterns written into MXL flows");
     node.dnsDomain = env("NMOS_DNS_DOMAIN");
+    if (auto const value = envPort("NMOS_CONTROL_PORT"); !value)
+    {
+        log("NMOS_CONTROL_PORT='%s' is not a port", env("NMOS_CONTROL_PORT").c_str());
+        return 2;
+    }
+    else
+    {
+        controlPort = *value;
+    }
+    if (controlPort != 0 && split->metricsPort == 0)
+    {
+        // The monitors' statuses come from the writers' metrics, which only
+        // --metrics-port has them serve.
+        log("NMOS_CONTROL_PORT needs --metrics-port");
+        return 2;
+    }
     node.registryHost = env("NMOS_REGISTRY_HOST");
     // nmos-cpp serves the IS-09 System API beside its registry, so a registry
     // named by address is the System API too unless told apart.
@@ -473,6 +606,7 @@ int main(int argc, char** argv)
     // NMOS.
     auto failed = false;
     auto nextTry = std::chrono::steady_clock::now();
+    auto nextPoll = std::chrono::steady_clock::now();
     while (!stopping && !failed)
     {
         if (!node.running && std::chrono::steady_clock::now() >= nextTry)
@@ -527,6 +661,11 @@ int main(int argc, char** argv)
             {
                 stop({writer.get()});
             }
+        }
+        if (node.running && controlPort != 0 && std::chrono::steady_clock::now() >= nextPoll)
+        {
+            pollMonitors(node);
+            nextPoll = std::chrono::steady_clock::now() + std::chrono::seconds{1};
         }
         logStopped();
         std::this_thread::sleep_for(std::chrono::milliseconds{100});
