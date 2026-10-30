@@ -1,0 +1,423 @@
+From dd6227c4086ebc8c5064df16498f20ade37426f1 Mon Sep 17 00:00:00 2001
+From: marquies <me@patrickbreucking.de>
+Date: Thu, 29 Oct 2026 13:10:13 +0100
+Subject: [PATCH] feat(mxl-gst-testsrc): write faults into a flow on command
+
+A reader's content checks could only be shown at work with a test
+writer of synthetic grains, beside the real source and on flows of its
+own. With MXL_TESTSRC_FAULTS naming a directory, each flow takes
+commands from the FIFO <directory>/<flow id>: the next N grains
+flagged invalid, committed with half their slices, carrying v210 code 0,
+or claiming one line fewer than they have; or no writing for S seconds.
+An audio flow takes the pause only. Without the variable nothing
+listens and every grain is written as before.
+---
+ tools/mxl-gst/faults.hpp  | 215 ++++++++++++++++++++++++++++++++++++++
+ tools/mxl-gst/testsrc.cpp |  96 ++++++++++++++++-
+ 2 files changed, 308 insertions(+), 3 deletions(-)
+ create mode 100644 tools/mxl-gst/faults.hpp
+
+diff --git a/tools/mxl-gst/faults.hpp b/tools/mxl-gst/faults.hpp
+new file mode 100644
+index 00000000..5d22d6f2
+--- /dev/null
++++ b/tools/mxl-gst/faults.hpp
+@@ -0,0 +1,215 @@
++// Faults mxl-gst-testsrc writes into a flow on command, so a reader's checks
++// can be shown at work on real media. Off unless MXL_TESTSRC_FAULTS names a
++// directory: each flow then takes commands, one per line, from the FIFO
++// <directory>/<flow id>.
++//
++//   invalid N    the next N grains carry the invalid flag and no payload
++//   partial N    the next N grains are committed with half their slices
++//   illegal N    the next N grains carry v210 code 0 throughout
++//   size N       the next N grains claim one line fewer than they have
++//   pause S      the flow is not written for S seconds
++//
++// An audio flow takes pause only.
++
++#pragma once
++
++#include <atomic>
++#include <cerrno>
++#include <chrono>
++#include <cmath>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++#include <functional>
++#include <mutex>
++#include <optional>
++#include <stdexcept>
++#include <string>
++#include <string_view>
++#include <thread>
++#include <utility>
++#include <fcntl.h>
++#include <poll.h>
++#include <unistd.h>
++#include <sys/stat.h>
++
++namespace faults
++{
++    enum class Kind
++    {
++        None,
++        Invalid,
++        Partial,
++        Illegal,
++        Size,
++        Pause
++    };
++
++    struct Command
++    {
++        Kind kind = Kind::None;
++        // Grains for a grain fault.
++        std::uint64_t count = 0;
++        // For a pause.
++        std::chrono::nanoseconds duration{0};
++    };
++
++    // The command in line, or nothing where it is not one a flow of this kind
++    // takes.
++    inline std::optional<Command> parse(std::string_view line, bool discrete)
++    {
++        while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
++        {
++            line.remove_suffix(1);
++        }
++        auto const space = line.find(' ');
++        if (space == std::string_view::npos)
++        {
++            return std::nullopt;
++        }
++        auto const name = line.substr(0, space);
++        auto const argument = std::string{line.substr(space + 1)};
++        char* end = nullptr;
++        if (name == "pause")
++        {
++            auto const seconds = std::strtod(argument.c_str(), &end);
++            if (end == argument.c_str() || *end != '\0' || !(seconds > 0.0) || seconds > 3600.0)
++            {
++                return std::nullopt;
++            }
++            return Command{.kind = Kind::Pause, .duration = std::chrono::nanoseconds{static_cast<std::int64_t>(std::llround(seconds * 1e9))}};
++        }
++        auto const kind = name == "invalid" ? Kind::Invalid
++                        : name == "partial" ? Kind::Partial
++                        : name == "illegal" ? Kind::Illegal
++                        : name == "size"    ? Kind::Size
++                                            : Kind::None;
++        if (kind == Kind::None || !discrete)
++        {
++            return std::nullopt;
++        }
++        auto const count = std::strtoull(argument.c_str(), &end, 10);
++        if (end == argument.c_str() || *end != '\0' || argument.front() == '-' || count == 0 || count > 100000)
++        {
++            return std::nullopt;
++        }
++        return Command{.kind = kind, .count = count};
++    }
++
++    // What a flow still has to write wrong. Set by the listener, taken by
++    // the flow's writer, a grain or a pause at a time.
++    class State
++    {
++    public:
++        void apply(Command const& command)
++        {
++            auto const lock = std::lock_guard{_mutex};
++            if (command.kind == Kind::Pause)
++            {
++                _pause = command.duration;
++            }
++            else
++            {
++                _kind = command.kind;
++                _remaining = command.count;
++            }
++        }
++
++        // The fault for the next grain, and one fewer to come.
++        Kind takeGrain()
++        {
++            auto const lock = std::lock_guard{_mutex};
++            if (_remaining == 0)
++            {
++                return Kind::None;
++            }
++            --_remaining;
++            return _kind;
++        }
++
++        // A pause asked for, once.
++        std::chrono::nanoseconds takePause()
++        {
++            auto const lock = std::lock_guard{_mutex};
++            return std::exchange(_pause, std::chrono::nanoseconds{0});
++        }
++
++    private:
++        std::mutex _mutex;
++        Kind _kind = Kind::None;
++        std::uint64_t _remaining = 0;
++        std::chrono::nanoseconds _pause{0};
++    };
++
++    // Reads commands from the FIFO at path into state until stop is set, and
++    // removes the FIFO then. Held open for writing as well, so a writer
++    // closing it is no end of input.
++    class Listener
++    {
++    public:
++        Listener(std::string path, State& state, bool discrete, std::atomic<int> const& stop, std::function<void(std::string const&)> log)
++            : _path{std::move(path)}
++        {
++            ::unlink(_path.c_str());
++            if (::mkfifo(_path.c_str(), 0622) != 0)
++            {
++                throw std::runtime_error{"cannot create the fault FIFO " + _path + ": " + std::strerror(errno)};
++            }
++            _fd = ::open(_path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
++            if (_fd < 0)
++            {
++                auto const error = std::string{std::strerror(errno)};
++                ::unlink(_path.c_str());
++                throw std::runtime_error{"cannot open the fault FIFO " + _path + ": " + error};
++            }
++            _thread = std::thread{[this, &state, discrete, &stop, log = std::move(log)]
++                {
++                    auto pending = std::string{};
++                    while (!stop)
++                    {
++                        auto pfd = pollfd{.fd = _fd, .events = POLLIN, .revents = 0};
++                        if (::poll(&pfd, 1, 200) != 1)
++                        {
++                            continue;
++                        }
++                        char buffer[256];
++                        auto const n = ::read(_fd, buffer, sizeof(buffer));
++                        if (n <= 0)
++                        {
++                            continue;
++                        }
++                        pending.append(buffer, static_cast<std::size_t>(n));
++                        for (auto end = pending.find('\n'); end != std::string::npos; end = pending.find('\n'))
++                        {
++                            auto const line = pending.substr(0, end);
++                            pending.erase(0, end + 1);
++                            if (auto const command = parse(line, discrete))
++                            {
++                                state.apply(*command);
++                                log("fault: " + line);
++                            }
++                            else
++                            {
++                                log("fault refused: '" + line + "'");
++                            }
++                        }
++                    }
++                }};
++        }
++
++        Listener(Listener const&) = delete;
++        Listener& operator=(Listener const&) = delete;
++
++        ~Listener()
++        {
++            _thread.join();
++            ::close(_fd);
++            ::unlink(_path.c_str());
++        }
++
++    private:
++        std::string _path;
++        int _fd = -1;
++        std::thread _thread;
++    };
++}
+diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
+index bdc8a949..7bf982d6 100644
+--- a/tools/mxl-gst/testsrc.cpp
++++ b/tools/mxl-gst/testsrc.cpp
+@@ -5,6 +5,7 @@
+ #include <cerrno>
+ #include <chrono>
+ #include <csignal>
++#include <memory>
+ #include <numeric>
+ #include <cstdint>
+ #include <cstdlib>
+@@ -30,6 +31,7 @@
+ #include <mxl/flow.h>
+ #include <mxl/mxl.h>
+ #include <mxl/time.h>
++#include "faults.hpp"
+ #include "utils.hpp"
+ 
+ namespace
+@@ -765,6 +767,12 @@ namespace
+             return _configInfo.common.maxCommitBatchSizeHint;
+         }
+ 
++        // Where the faults this flow is to write come from; none without it.
++        void takeFaultsFrom(faults::State* state) noexcept
++        {
++            _faults = state;
++        }
++
+         void run(VideoPipeline& gstPipeline, std::int64_t offset)
+         {
+             if (_configInfo.common.format != MXL_DATA_FORMAT_VIDEO)
+@@ -800,6 +808,7 @@ namespace
+             auto const steadyGrains = ::mxlTimestampToIndex(&gstPipeline.config().frameRate, 2'000'000'000ULL);
+             while (!g_exit_requested)
+             {
++                pauseOnCommand();
+                 auto const timeoutNs = (grainIndex != MXL_UNDEFINED_INDEX && !restarted)
+                                          ? ::mxlGetNsUntilIndex(grainIndex + 1, &gstPipeline.config().frameRate)
+                                          : 100'000'000ULL; // arbitrary high timeout for the first grain
+@@ -952,6 +961,36 @@ namespace
+                             }
+ 
+                             gInfo.validSlices = 0;
++                            // libmxl hands back the slot's header as the last grain in it
++                            // left it, so a size a fault shortened would stay with the slot.
++                            if (_grainSize == 0)
++                            {
++                                _grainSize = gInfo.grainSize;
++                            }
++                            gInfo.grainSize = _grainSize;
++
++                            // A fault asked for through MXL_TESTSRC_FAULTS, written as the
++                            // grain is, so a reader meets it as it would from a faulty writer.
++                            auto const fault = _faults != nullptr ? _faults->takeGrain() : faults::Kind::None;
++                            auto sliceLimit = gInfo.totalSlices;
++                            if (fault == faults::Kind::Invalid)
++                            {
++                                gInfo.flags = MXL_GRAIN_FLAG_INVALID;
++                                sliceLimit = 0;
++                                if (::mxlMonitoringFlowWriterCommitGrain(_flow, _writer, &gInfo) != MXL_STATUS_OK)
++                                {
++                                    MXL_ERROR("Failed to commit invalid grain at index '{}'", actualGrainIndex);
++                                }
++                            }
++                            else if (fault == faults::Kind::Partial)
++                            {
++                                sliceLimit = std::max<std::uint16_t>(gInfo.totalSlices / 2, 1);
++                            }
++                            else if (fault == faults::Kind::Size)
++                            {
++                                // The commit stores the header as given, size included.
++                                gInfo.grainSize -= gInfo.grainSize / gInfo.totalSlices;
++                            }
+ 
+                             auto const sliceSize = gstPipeline.config().sliceSize;
+ 
+@@ -969,12 +1008,20 @@ namespace
+                                 }
+                             }
+ 
+-                            for (auto i = std::size_t{0}; i < nbBatches; ++i)
++                            for (auto i = std::size_t{0}; i < nbBatches && gInfo.validSlices < sliceLimit; ++i)
+                             {
+-                                auto const nbSlices = std::min<std::uint16_t>(slicesPerBatch, gInfo.totalSlices - gInfo.validSlices);
++                                auto const nbSlices = std::min<std::uint16_t>(slicesPerBatch, sliceLimit - gInfo.validSlices);
+ 
+                                 auto const batchOffset = sliceSize * slicesPerBatch * i;
+-                                ::memcpy(mxlBuffer + batchOffset, mapInfo.data + batchOffset, nbSlices * sliceSize);
++                                if (fault == faults::Kind::Illegal)
++                                {
++                                    // v210 code 0 is reserved for timing reference.
++                                    ::memset(mxlBuffer + batchOffset, 0, nbSlices * sliceSize);
++                                }
++                                else
++                                {
++                                    ::memcpy(mxlBuffer + batchOffset, mapInfo.data + batchOffset, nbSlices * sliceSize);
++                                }
+                                 gInfo.validSlices += nbSlices;
+ 
+                                 if (::mxlMonitoringFlowWriterCommitGrain(_flow, _writer, &gInfo) != MXL_STATUS_OK)
+@@ -1017,6 +1064,7 @@ namespace
+             auto sampleIndex = std::uint64_t{MXL_UNDEFINED_INDEX};
+             while (!g_exit_requested)
+             {
++                pauseOnCommand();
+                 auto const timeoutNs = (sampleIndex != MXL_UNDEFINED_INDEX)
+                                          ? mxlGetNsUntilIndex(sampleIndex + samplesPerBatch, &gstPipeline.config().sampleRate)
+                                          : 100'000'000ULL; // arbitrary high timeout for the first sample
+@@ -1165,6 +1213,24 @@ namespace
+ 
+     private:
+         mxlMonitoringFlow _flow;
++        faults::State* _faults = nullptr;
++        // The grain size of the first grain opened, which every grain has.
++        decltype(mxlGrainInfo::grainSize) _grainSize = 0;
++
++        // Holds the flow's thread for a pause asked for, writing nothing.
++        void pauseOnCommand()
++        {
++            if (_faults == nullptr)
++            {
++                return;
++            }
++            auto const pause = _faults->takePause();
++            auto const until = std::chrono::steady_clock::now() + pause;
++            while (pause.count() > 0 && !g_exit_requested && std::chrono::steady_clock::now() < until)
++            {
++                std::this_thread::sleep_for(std::chrono::milliseconds{10});
++            }
++        }
+         mxlInstance _instance;
+ 
+         mxlFlowWriter _writer;
+@@ -1184,6 +1250,24 @@ namespace
+     }
+ }
+ 
++namespace
++{
++    // The listener for a flow's fault commands where MXL_TESTSRC_FAULTS names
++    // a directory, or none.
++    std::unique_ptr<faults::Listener> listenForFaults(std::string const& flowId, bool discrete, faults::State& state)
++    {
++        auto const* directory = std::getenv("MXL_TESTSRC_FAULTS");
++        if (directory == nullptr || *directory == '\0')
++        {
++            return nullptr;
++        }
++        auto listener = std::make_unique<faults::Listener>(std::string{directory} + "/" + flowId, state, discrete, g_exit_requested,
++            [flowId](std::string const& line) { MXL_INFO("Flow {}: {}", flowId, line); });
++        MXL_WARN("Flow {} writes faults on command from {}/{}", flowId, directory, flowId);
++        return listener;
++    }
++}
++
+ int main(int argc, char** argv)
+ {
+     std::signal(SIGINT, &signal_handler);
+@@ -1332,6 +1416,9 @@ int main(int argc, char** argv)
+                     json_utils::updateGroupHint(flowNmos, groupHint, "video");
+                     auto mxlWriter = MxlWriter{
+                         monitoring, json_utils::getField<std::string>(flowNmos, "id"), domain, json_utils::serializeJson(flowNmos), flowOptions};
++                    auto faultState = faults::State{};
++                    auto const faultListener = listenForFaults(json_utils::getField<std::string>(flowNmos, "id"), true, faultState);
++                    mxlWriter.takeFaultsFrom(faultListener ? &faultState : nullptr);
+                     auto const frameWidth = static_cast<std::uint64_t>(json_utils::getField<double>(flowNmos, "frame_width"));
+                     auto const frameHeight = static_cast<std::uint64_t>(json_utils::getField<double>(flowNmos, "frame_height"));
+                     if (mxlWriter.maxCommitBatchSizeHint() > frameHeight)
+@@ -1378,6 +1465,9 @@ int main(int argc, char** argv)
+ 
+                     auto mxlWriter = MxlWriter{
+                         monitoring, json_utils::getField<std::string>(flowNmos, "id"), domain, json_utils::serializeJson(flowNmos), flowOptions};
++                    auto faultState = faults::State{};
++                    auto const faultListener = listenForFaults(json_utils::getField<std::string>(flowNmos, "id"), false, faultState);
++                    mxlWriter.takeFaultsFrom(faultListener ? &faultState : nullptr);
+ 
+                     auto const gstConfig = AudioPipelineConfig{
+                         .sampleRate = json_utils::getRational(flowNmos, "sample_rate"),
+-- 
+2.34.1
+
