@@ -1,42 +1,24 @@
-// What a Sender's BCP-008 monitor reports, worked out from the metrics its
-// writer process serves. Links neither libmxl nor NvNmos, so senders-test.cpp
-// covers it on its own.
+// What a Sender's BCP-008 monitor reports. The writer processes serve their
+// counts as Prometheus text; this reads them back into libmxl-monitoring
+// snapshots, whose bcp008.h judges the statuses and counts the counters.
+// Links no NvNmos, so senders-test.cpp covers it on its own.
 
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
-#include <map>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
+#include <mxl-monitoring/bcp008.h>
+#include <mxl-monitoring/monitoring.h>
 
 namespace monitors
 {
-    // BCP-008's values. Link: all up, some down, all down. Transmission and
-    // essence: inactive, healthy, partially healthy, unhealthy.
-    // Synchronization: not used to unhealthy.
-    enum : int
-    {
-        Inactive = 0,
-        Healthy = 1,
-        PartiallyHealthy = 2,
-        Unhealthy = 3,
-        AllUp = 1,
-        AllDown = 3,
-        NotUsed = 0
-    };
-
-    // One flow's state as its writer reports it.
-    struct Sample
-    {
-        bool delivering = false;
-        std::string state;
-        std::map<std::string, std::uint64_t> writes;
-    };
-
     namespace details
     {
         // The value of label name in a sample line's label set, or nothing.
@@ -52,13 +34,56 @@ namespace monitors
             auto const end = labels.find('"', start);
             return end == std::string_view::npos ? std::nullopt : std::optional{labels.substr(start, end - start)};
         }
+
+        struct Key
+        {
+            char const* name;
+            int index;
+        };
+
+        // The label values libmxl-monitoring's Prometheus text gives a
+        // writer's write results and open failures.
+        constexpr Key Writes[] = {
+            {"ok",               MXL_MONITORING_WRITE_OK               },
+            {"input_late",       MXL_MONITORING_WRITE_INPUT_LATE       },
+            {"invalid_input",    MXL_MONITORING_WRITE_INVALID_INPUT    },
+            {"permission_error", MXL_MONITORING_WRITE_PERMISSION_DENIED},
+            {"out_of_space",     MXL_MONITORING_WRITE_OUT_OF_SPACE     },
+            {"other_error",      MXL_MONITORING_WRITE_ERROR            },
+        };
+        constexpr Key OpenFailures[] = {
+            {"domain",     MXL_MONITORING_ACCESS_DOMAIN_UNAVAILABLE},
+            {"not_found",  MXL_MONITORING_ACCESS_FLOW_NOT_FOUND    },
+            {"permission", MXL_MONITORING_ACCESS_PERMISSION_DENIED },
+            {"other",      MXL_MONITORING_ACCESS_OTHER             },
+        };
+
+        template<std::size_t N>
+        std::optional<int> find(Key const (&keys)[N], std::string_view name)
+        {
+            for (auto const& key : keys)
+            {
+                if (name == key.name)
+                {
+                    return key.index;
+                }
+            }
+            return std::nullopt;
+        }
     }
 
-    // The sample of flowId in a writer's Prometheus text, or nothing where the
-    // text names no state for it.
-    inline std::optional<Sample> parse(std::string_view text, std::string const& flowId)
+    using Snapshot = mxlMonitoringFlowSnapshot;
+
+    // The snapshot of the writer of flowId in a writer process's Prometheus
+    // text, or nothing where the text names no state for it. Holds what the
+    // text carries: access, delivery, unit and every count.
+    inline std::optional<Snapshot> parse(std::string_view text, std::string const& flowId)
     {
-        auto sample = Sample{};
+        auto s = Snapshot{};
+        s.version = 2;
+        s.size = sizeof(s);
+        s.role = MXL_MONITORING_ROLE_WRITER;
+        std::strncpy(s.flowId, flowId.c_str(), sizeof(s.flowId) - 1);
         auto stated = false;
         while (!text.empty())
         {
@@ -77,100 +102,101 @@ namespace monitors
             {
                 continue;
             }
-            auto const value = std::string{line.substr(close + 1)};
-            auto const number = std::strtod(value.c_str(), nullptr);
-            if (name == "mxl_writer_flow_delivering")
+            auto const value = std::strtoull(std::string{line.substr(close + 1)}.c_str(), nullptr, 10);
+            if (name == "mxl_writer_flow_state" && value == 1)
             {
-                sample.delivering = number == 1.0;
-            }
-            else if (name == "mxl_writer_flow_state" && number == 1.0)
-            {
-                if (auto const state = details::label(labels, "state"))
+                for (auto access = 0; access < MXL_MONITORING_ACCESS_COUNT; ++access)
                 {
-                    sample.state = std::string{*state};
-                    stated = true;
+                    if (details::label(labels, "state") == mxlMonitoringAccessName(static_cast<mxlMonitoringAccess>(access)))
+                    {
+                        s.access = static_cast<mxlMonitoringAccess>(access);
+                        stated = true;
+                        break;
+                    }
                 }
+            }
+            else if (name == "mxl_writer_flow_delivering")
+            {
+                s.delivering = value == 1;
+            }
+            else if (name == "mxl_writer_flow_info")
+            {
+                s.unit = details::label(labels, "unit") == "samples" ? MXL_MONITORING_UNIT_SAMPLE : MXL_MONITORING_UNIT_GRAIN;
             }
             else if (name == "mxl_writer_writes_total")
             {
-                if (auto const result = details::label(labels, "result"))
+                if (auto const i = details::find(details::Writes, details::label(labels, "result").value_or("")))
                 {
-                    sample.writes[std::string{*result}] = static_cast<std::uint64_t>(number);
+                    s.writes[*i] = value;
                 }
             }
+            else if (name == "mxl_writer_invalid_input_total")
+            {
+                for (auto issue = 0; issue < MXL_MONITORING_CONTENT_COUNT; ++issue)
+                {
+                    if (details::label(labels, "issue") == mxlMonitoringContentName(static_cast<mxlMonitoringContent>(issue)))
+                    {
+                        s.content[issue] = value;
+                    }
+                }
+            }
+            else if (name == "mxl_writer_open_failures_total")
+            {
+                if (auto const i = details::find(details::OpenFailures, details::label(labels, "reason").value_or("")))
+                {
+                    s.accessFailures[*i] = value;
+                }
+            }
+            else if (name == "mxl_writer_opens_total")
+            {
+                s.opens = value;
+            }
+            else if (name == "mxl_writer_lost_total")
+            {
+                s.losses = value;
+            }
         }
-        return stated ? std::optional{sample} : std::nullopt;
+        return stated ? std::optional{s} : std::nullopt;
     }
 
-    struct Status
-    {
-        int value;
-        std::string message;
-    };
+    // Link, transmission, synchronization and essence, in that order.
+    using Statuses = std::array<mxlMonitoringBcp008Domain, 4>;
 
-    // What one poll reports per status domain; nothing leaves the status as
-    // it was.
-    struct Report
+    // The statuses of an active Sender from its writer's snapshot now, or
+    // none where the writer process does not answer, and the snapshot a poll
+    // before. A domain left UNCHANGED keeps what it reported.
+    inline Statuses judge(std::optional<Snapshot> const& previous, std::optional<Snapshot> const& current)
     {
-        std::optional<Status> link;
-        std::optional<Status> transmission;
-        Status synchronization{NotUsed, ""};
-        std::optional<Status> essence;
-    };
-
-    // The statuses of an active Sender from its writer's sample now, or none
-    // where the writer does not answer, and the sample a poll before. Writes
-    // counted since then decide the essence: input written as invalid is
-    // unhealthy, input that arrived too late only partially healthy. The MXL
-    // domain is the Sender's only link.
-    inline Report report(std::optional<Sample> const& previous, std::optional<Sample> const& current)
-    {
-        auto out = Report{};
+        auto const unchanged = mxlMonitoringBcp008Domain{.status = MXL_MONITORING_BCP008_UNCHANGED, .message = {}};
+        auto out = Statuses{unchanged, unchanged, unchanged, unchanged};
+        auto statuses = mxlMonitoringBcp008Statuses{};
+        statuses.version = 1;
+        statuses.size = sizeof(statuses);
         if (!current)
         {
-            out.transmission = Status{Unhealthy, "the writer process does not answer"};
-            return out;
+            out[1].status = MXL_MONITORING_BCP008_UNHEALTHY;
+            std::strncpy(out[1].message, "the writer process does not answer", sizeof(out[1].message) - 1);
         }
-        out.link = current->state == "domain_unavailable" ? Status{AllDown, "the MXL domain is unavailable"} : Status{AllUp, ""};
-        out.transmission = current->delivering ? Status{Healthy, ""}
-                                               : Status{Unhealthy, "no commit within the last second, flow " + current->state};
-        auto since = [&](char const* result)
+        else if (mxlMonitoringBcp008GetStatuses(previous ? &*previous : nullptr, &*current, &statuses) == MXL_STATUS_OK)
         {
-            auto const now = current->writes.contains(result) ? current->writes.at(result) : 0;
-            auto const before = previous && previous->writes.contains(result) ? previous->writes.at(result) : 0;
-            // A writer started again counts from zero.
-            return now >= before ? now - before : now;
-        };
-        if (auto const invalid = since("invalid_input"); invalid > 0)
-        {
-            out.essence = Status{Unhealthy, std::to_string(invalid) + " written as invalid input"};
-        }
-        else if (auto const late = since("input_late"); late > 0)
-        {
-            out.essence = Status{PartiallyHealthy, std::to_string(late) + " written late, without input in time"};
-        }
-        else
-        {
-            out.essence = Status{Healthy, ""};
+            out = {statuses.link, statuses.connection, statuses.synchronization, statuses.stream};
         }
         return out;
     }
 
-    // The transmission error counters: every write result but ok, counted
-    // since baseline, the sample at the last reset. A writer started again
-    // counts from zero, below its baseline.
-    inline std::vector<std::pair<std::string, std::uint64_t>> errorCounters(Sample const& current, Sample const& baseline)
+    // The transmission error counters, counted since baseline, the snapshot
+    // at the monitor's last reset, or since the writer process started
+    // without one.
+    inline std::vector<mxlMonitoringBcp008Counter> errorCounters(std::optional<Snapshot> const& baseline, Snapshot const& latest)
     {
-        auto out = std::vector<std::pair<std::string, std::uint64_t>>{};
-        for (auto const& [result, now] : current.writes)
+        auto out = std::vector<mxlMonitoringBcp008Counter>(4);
+        auto count = out.size();
+        if (mxlMonitoringBcp008GetCounters(baseline ? &*baseline : nullptr, &latest, MXL_MONITORING_BCP008_TRANSMISSION_ERROR, out.data(),
+                &count) != MXL_STATUS_OK)
         {
-            if (result == "ok")
-            {
-                continue;
-            }
-            auto const before = baseline.writes.contains(result) ? baseline.writes.at(result) : 0;
-            out.emplace_back(result, now >= before ? now - before : now);
+            return {};
         }
+        out.resize(std::min(count, out.size()));
         return out;
     }
 }

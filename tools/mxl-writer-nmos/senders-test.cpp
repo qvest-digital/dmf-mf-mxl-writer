@@ -440,61 +440,96 @@ namespace
     void monitoring()
     {
         auto const video = std::string{"5fbec3b1-1b0f-417d-9059-8b94a47197ed"};
-        auto text = [&](char const* state, int delivering, int late, int invalid, int errors)
+        // A writer process's text as libmxl-monitoring renders it.
+        auto text = [&](char const* state, int delivering, int ok, int late, int invalid, int denied, int full, int failed)
         {
             auto const f = "flow=\"" + video + "\"";
-            return "# TYPE mxl_writer_flow_state gauge\n"
-                   "mxl_writer_flow_state{" + f + ",state=\"open\"} " + (std::string{state} == "open" ? "1" : "0") + "\n"
+            auto const n = [](int v) { return std::to_string(v); };
+            return "# TYPE mxl_writer_flow_info gauge\n"
+                   "mxl_writer_flow_info{" + f + ",media_type=\"video/v210\",unit=\"grains\"} 1\n"
                    "mxl_writer_flow_state{" + f + ",state=\"" + state + "\"} 1\n"
-                   "mxl_writer_flow_delivering{" + f + "} " + std::to_string(delivering) + "\n"
-                   "mxl_writer_writes_total{" + f + ",result=\"ok\"} 5000\n"
-                   "mxl_writer_writes_total{" + f + ",result=\"input_late\"} " + std::to_string(late) + "\n"
-                   "mxl_writer_writes_total{" + f + ",result=\"invalid_input\"} " + std::to_string(invalid) + "\n"
-                   "mxl_writer_writes_total{" + f + ",result=\"other_error\"} " + std::to_string(errors) + "\n"
+                   "mxl_writer_flow_delivering{" + f + "} " + n(delivering) + "\n"
+                   "mxl_writer_writes_total{" + f + ",result=\"ok\"} " + n(ok) + "\n"
+                   "mxl_writer_writes_total{" + f + ",result=\"input_late\"} " + n(late) + "\n"
+                   "mxl_writer_writes_total{" + f + ",result=\"invalid_input\"} " + n(invalid) + "\n"
+                   "mxl_writer_writes_total{" + f + ",result=\"permission_error\"} " + n(denied) + "\n"
+                   "mxl_writer_writes_total{" + f + ",result=\"out_of_space\"} " + n(full) + "\n"
+                   "mxl_writer_writes_total{" + f + ",result=\"other_error\"} " + n(failed) + "\n"
+                   "mxl_writer_invalid_input_total{" + f + ",issue=\"wrong_size\"} " + n(invalid) + "\n"
+                   "mxl_writer_open_failures_total{" + f + ",reason=\"domain\"} 2\n"
+                   "mxl_writer_opens_total{" + f + "} 1\n"
+                   "mxl_writer_lost_total{" + f + "} 0\n"
                    "mxl_writer_flow_delivering{flow=\"b3bb5be7-9fe9-4324-a5bb-4c70e1084449\"} 0\n";
         };
 
-        auto const healthy = monitors::parse(text("open", 1, 0, 0, 0), video);
-        check(healthy && healthy->delivering && healthy->state == "open" && healthy->writes.at("ok") == 5000, "a flow's sample is read from its writer's text");
-        check(!monitors::parse(text("open", 1, 0, 0, 0), "b3bb5be7-9fe9-4324-a5bb-4c70e1084449"), "a flow the text names no state for has no sample");
+        auto const healthy = monitors::parse(text("open", 1, 5000, 0, 0, 0, 0, 0), video);
+        check(healthy && healthy->access == MXL_MONITORING_ACCESS_OPEN && healthy->delivering && healthy->role == MXL_MONITORING_ROLE_WRITER &&
+                  healthy->unit == MXL_MONITORING_UNIT_GRAIN && healthy->writes[MXL_MONITORING_WRITE_OK] == 5000 &&
+                  healthy->accessFailures[MXL_MONITORING_ACCESS_DOMAIN_UNAVAILABLE] == 2 && healthy->opens == 1 && video == healthy->flowId,
+            "a flow's snapshot is read from its writer's text");
+        auto const failing = monitors::parse(text("open", 1, 5000, 4, 1, 3, 2, 7), video);
+        check(failing && failing->writes[MXL_MONITORING_WRITE_INPUT_LATE] == 4 && failing->writes[MXL_MONITORING_WRITE_INVALID_INPUT] == 1 &&
+                  failing->writes[MXL_MONITORING_WRITE_PERMISSION_DENIED] == 3 && failing->writes[MXL_MONITORING_WRITE_OUT_OF_SPACE] == 2 &&
+                  failing->writes[MXL_MONITORING_WRITE_ERROR] == 7 && failing->content[MXL_MONITORING_CONTENT_WRONG_SIZE] == 1,
+            "every write result and input issue is read into its own count");
+        check(!monitors::parse(text("open", 1, 5000, 0, 0, 0, 0, 0), "b3bb5be7-9fe9-4324-a5bb-4c70e1084449"),
+            "a flow the text names no state for has no snapshot");
 
-        auto report = monitors::report(healthy, healthy);
-        check(report.link && report.link->value == monitors::AllUp, "a reachable domain is the link all up");
-        check(report.transmission && report.transmission->value == monitors::Healthy, "commits landing are a healthy transmission");
-        check(report.essence && report.essence->value == monitors::Healthy, "nothing late or invalid is a healthy essence");
-        check(report.synchronization.value == monitors::NotUsed, "no external synchronization is observed");
-
-        report = monitors::report(healthy, monitors::parse(text("open", 1, 3, 0, 0), video));
-        check(report.essence && report.essence->value == monitors::PartiallyHealthy && report.essence->message.starts_with("3 "),
-            "input late since the last poll is a partially healthy essence");
-        report = monitors::report(monitors::parse(text("open", 1, 3, 0, 0), video), monitors::parse(text("open", 1, 3, 0, 0), video));
-        check(report.essence && report.essence->value == monitors::Healthy, "late input counted before the last poll no longer counts");
-        report = monitors::report(healthy, monitors::parse(text("open", 1, 3, 2, 0), video));
-        check(report.essence && report.essence->value == monitors::Unhealthy, "invalid input outweighs late input");
-        report = monitors::report(monitors::parse(text("open", 1, 9, 0, 0), video), monitors::parse(text("open", 1, 2, 0, 0), video));
-        check(report.essence && report.essence->value == monitors::PartiallyHealthy && report.essence->message.starts_with("2 "),
-            "a writer started again counts its late input from zero");
-
-        report = monitors::report(healthy, monitors::parse(text("domain_unavailable", 0, 0, 0, 0), video));
-        check(report.link && report.link->value == monitors::AllDown, "an unavailable domain is the link all down");
-        check(report.transmission && report.transmission->value == monitors::Unhealthy
-                && report.transmission->message.find("domain_unavailable") != std::string::npos,
-            "no commit is an unhealthy transmission naming the flow's state");
-
-        report = monitors::report(healthy, std::nullopt);
-        check(report.transmission && report.transmission->value == monitors::Unhealthy, "a writer not answering is an unhealthy transmission");
-        check(!report.link && !report.essence, "a writer not answering leaves the link and the essence as they were");
-
-        auto const counters = monitors::errorCounters(*monitors::parse(text("open", 1, 4, 1, 7), video), *healthy);
-        auto count = [&](char const* name)
+        enum
         {
-            auto const it = std::find_if(counters.begin(), counters.end(), [&](auto const& c) { return c.first == name; });
-            return it == counters.end() ? -1 : static_cast<long long>(it->second);
+            Link,
+            Transmission,
+            Synchronization,
+            Essence
         };
-        check(count("ok") == -1 && count("input_late") == 4 && count("invalid_input") == 1 && count("other_error") == 7,
-            "every write result but ok is a transmission error counter");
-        check(monitors::errorCounters(*healthy, *monitors::parse(text("open", 1, 4, 1, 7), video)).at(0).second == 0,
-            "a writer started again counts from zero, below its baseline");
+        auto statuses = monitors::judge(healthy, monitors::parse(text("open", 1, 5050, 0, 0, 0, 0, 0), video));
+        check(statuses[Link].status == MXL_MONITORING_BCP008_HEALTHY, "a reachable domain is the link all up");
+        check(statuses[Transmission].status == MXL_MONITORING_BCP008_HEALTHY, "commits landing are a healthy transmission");
+        check(statuses[Synchronization].status == MXL_MONITORING_BCP008_INACTIVE, "no external synchronization is used");
+        check(statuses[Essence].status == MXL_MONITORING_BCP008_HEALTHY, "input written in time is a healthy essence");
+
+        // Late and invalid input is the essence's, not the transmission's.
+        statuses = monitors::judge(healthy, monitors::parse(text("open", 1, 5050, 3, 0, 0, 0, 0), video));
+        check(statuses[Essence].status == MXL_MONITORING_BCP008_PARTIALLY_HEALTHY && statuses[Transmission].status == MXL_MONITORING_BCP008_HEALTHY,
+            "some input late since the last poll is a partially healthy essence and a healthy transmission");
+        statuses = monitors::judge(healthy, monitors::parse(text("open", 1, 5050, 3, 2, 0, 0, 0), video));
+        check(statuses[Essence].status == MXL_MONITORING_BCP008_UNHEALTHY, "invalid input outweighs late input");
+        statuses = monitors::judge(healthy, monitors::parse(text("open", 1, 5050, 0, 0, 0, 0, 1), video));
+        check(statuses[Transmission].status == MXL_MONITORING_BCP008_UNHEALTHY, "a failed commit since the last poll is an unhealthy transmission");
+        statuses = monitors::judge(healthy, healthy);
+        check(statuses[Essence].status == MXL_MONITORING_BCP008_UNCHANGED, "nothing written since the last poll leaves the essence as it was");
+
+        statuses = monitors::judge(healthy, monitors::parse(text("domain_unavailable", 0, 5000, 0, 0, 0, 0, 0), video));
+        check(statuses[Link].status == MXL_MONITORING_BCP008_UNHEALTHY, "an unavailable domain is the link all down");
+        check(statuses[Transmission].status == MXL_MONITORING_BCP008_UNHEALTHY &&
+                  std::string{statuses[Transmission].message}.find("domain_unavailable") != std::string::npos,
+            "an unavailable domain is an unhealthy transmission naming the flow's state");
+
+        statuses = monitors::judge(healthy, std::nullopt);
+        check(statuses[Transmission].status == MXL_MONITORING_BCP008_UNHEALTHY, "a writer not answering is an unhealthy transmission");
+        check(statuses[Link].status == MXL_MONITORING_BCP008_UNCHANGED && statuses[Essence].status == MXL_MONITORING_BCP008_UNCHANGED,
+            "a writer not answering leaves the link and the essence as they were");
+
+        auto count = [](std::vector<mxlMonitoringBcp008Counter> const& counters, std::string const& name)
+        {
+            auto const it = std::find_if(counters.begin(), counters.end(), [&](auto const& c) { return name == c.name; });
+            return it == counters.end() ? -1 : static_cast<long long>(it->value);
+        };
+        auto counters = monitors::errorCounters(std::nullopt, *failing);
+        check(counters.size() == 3 && count(counters, "permission_denied") == 3 && count(counters, "out_of_space") == 2 &&
+                  count(counters, "write_error") == 7,
+            "the transmission error counters are the failed commits and writes, by outcome");
+        check(count(counters, "input_late") == -1 && count(counters, "invalid_input") == -1, "late and invalid input are no transmission errors");
+        auto const reset = monitors::parse(text("open", 1, 5000, 0, 0, 1, 1, 5), video);
+        counters = monitors::errorCounters(reset, *failing);
+        check(count(counters, "permission_denied") == 2 && count(counters, "out_of_space") == 1 && count(counters, "write_error") == 2,
+            "the counters count since the last reset");
+
+        // A writer process started again, as every activation starts it,
+        // counts from zero.
+        auto const restarted = monitors::parse(text("open", 1, 50, 0, 0, 0, 0, 1), video);
+        check(mxlMonitoringBcp008Restarted(&*failing, &*restarted) && !mxlMonitoringBcp008Restarted(&*healthy, &*failing),
+            "counts lower than a poll before are a writer started again");
     }
 }
 

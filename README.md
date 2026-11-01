@@ -183,17 +183,21 @@ names them changes nothing, and any other value is refused with 400.
   `NcSenderMonitor` (BCP-008-02) per Sender in a `sender-monitors` block,
   linked to its Sender by a touchpoint. A monitor is active while its Sender
   is. Once a second the Node reads each active Sender's process metrics and
-  reports:
+  reports the statuses libmxl-monitoring's `bcp008.h` judges from the counts
+  since the poll before; a status it leaves unchanged stays as it was:
 
   | Status | From the writer |
   |---|---|
-  | link | all up, or all down while the flow's state is `domain_unavailable` |
-  | transmission | healthy while commits land within a second, unhealthy otherwise or while the process does not answer |
-  | external synchronization | not used: the writer observes no external clock |
-  | essence | unhealthy after input written as invalid since the last poll, partially healthy after input written late, healthy otherwise |
+  | link | all up, or all down while the MXL domain is unavailable |
+  | transmission | unhealthy while the flow is not open, nothing is committed within a second or the process does not answer, or after the flow went away or a commit failed since the last poll; healthy otherwise |
+  | external synchronization | not used: MXL timestamps come from the Node's own clock |
+  | essence | unhealthy after invalid input, or input late for every write, since the last poll; partially healthy after some input late; healthy after input written in time; unchanged while nothing is written |
 
-  `GetTransmissionErrorCounters` answers every `mxl_writer_writes_total` result
-  but `ok`, counted since the last `ResetCounters`.
+  `GetTransmissionErrorCounters` answers `permission_denied`, `out_of_space` and
+  `write_error`, the failed commits and writes, counted since the last
+  `ResetCounters`, or since the process started where it started again after
+  that reset, as every activation starts it. Input late and invalid input count
+  towards the essence only.
 - `SIGTERM` stops the Node and then every process, against one 10 s
   deadline after which a process still running is killed. As the container's
   PID 1 it also reaps any process a writer leaves behind.
@@ -229,7 +233,8 @@ docker build -t dmf-mf-mxl-writer:dev .
 
 The build runs `mxl-writer-status-tests` and `mxl-writer-nmos-tests` and fails
 with them. They cover `tools/mxl-writer-status/status.hpp`, the HTTP server in
-`server.hpp`, and `tools/mxl-writer-nmos/senders.hpp` and `repeats.hpp`.
+`server.hpp`, and `tools/mxl-writer-nmos/senders.hpp`, `repeats.hpp` and
+`monitors.hpp`.
 
 Override defaults with `--build-arg`:
 

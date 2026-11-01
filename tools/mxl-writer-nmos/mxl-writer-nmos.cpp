@@ -91,12 +91,13 @@ namespace
         // The loopback port the writer serves its metrics on, 0 without
         // --metrics-port.
         unsigned int metricsPort = 0;
-        // The monitor's view of the writer: the sample of the last poll and
-        // the one of its last counter reset. Polled by the main loop, read by
-        // the IS-12 callbacks.
+        // The monitor's view of the writer: the snapshot of the last poll and
+        // the one of its last counter reset, none for counts since the
+        // process started. Polled by the main loop, read by the IS-12
+        // callbacks.
         std::mutex monitorMutex;
-        std::optional<monitors::Sample> latest;
-        monitors::Sample baseline;
+        std::optional<monitors::Snapshot> latest;
+        std::optional<monitors::Snapshot> baseline;
     };
 
     std::vector<std::unique_ptr<Writer>> writers;
@@ -165,25 +166,19 @@ namespace
         {
             return 0;
         }
-        // NvNmos copies the names before this thread calls again.
-        thread_local auto names = std::vector<std::string>{};
-        auto values = std::vector<std::pair<std::string, std::uint64_t>>{};
+        auto values = std::vector<mxlMonitoringBcp008Counter>{};
         {
             auto const lock = std::lock_guard{writer->monitorMutex};
             if (writer->latest)
             {
-                values = monitors::errorCounters(*writer->latest, writer->baseline);
+                values = monitors::errorCounters(writer->baseline, *writer->latest);
             }
-        }
-        names.clear();
-        for (auto const& value : values)
-        {
-            names.push_back(value.first);
         }
         auto const count = std::min(values.size(), maxCounters);
         for (std::size_t i = 0; i < count; ++i)
         {
-            counters[i] = NvNmosMonitorCounter{.name = names[i].c_str(), .value = values[i].second, .description = nullptr};
+            // The library's names and descriptions are static.
+            counters[i] = NvNmosMonitorCounter{.name = values[i].name, .value = values[i].value, .description = values[i].description};
         }
         return count;
     }
@@ -193,7 +188,7 @@ namespace
         if (auto* writer = findWriter(side, name))
         {
             auto const lock = std::lock_guard{writer->monitorMutex};
-            writer->baseline = writer->latest.value_or(monitors::Sample{});
+            writer->baseline = writer->latest;
         }
     }
 
@@ -422,9 +417,13 @@ namespace
     }
 
     // Reports every active Sender's statuses from what its writer serves; a
-    // Sender deactivated over IS-05 has its monitor inactive already.
+    // Sender deactivated over IS-05 has its monitor inactive already. A
+    // writer process started again, as every activation does, counts from
+    // zero, so a counter baseline from before it is dropped.
     void pollMonitors(Node& node)
     {
+        constexpr NvNmosMonitorDomain Domains[] = {NVNMOS_MONITOR_DOMAIN_LINK, NVNMOS_MONITOR_DOMAIN_CONNECTION,
+            NVNMOS_MONITOR_DOMAIN_SYNCHRONIZATION, NVNMOS_MONITOR_DOMAIN_STREAM};
         for (auto& writer : writers)
         {
             if (!writer->wanted)
@@ -432,29 +431,31 @@ namespace
                 continue;
             }
             auto const text = metrics::fetch(static_cast<std::uint16_t>(writer->metricsPort), std::chrono::milliseconds{500});
-            auto const sample = text ? monitors::parse(*text, writer->flow.flowId) : std::nullopt;
-            auto previous = std::optional<monitors::Sample>{};
+            auto const snapshot = text ? monitors::parse(*text, writer->flow.flowId) : std::nullopt;
+            auto previous = std::optional<monitors::Snapshot>{};
             {
                 auto const lock = std::lock_guard{writer->monitorMutex};
                 previous = writer->latest;
-                if (sample)
+                if (snapshot)
                 {
-                    writer->latest = sample;
+                    if (previous && mxlMonitoringBcp008Restarted(&*previous, &*snapshot))
+                    {
+                        writer->baseline.reset();
+                    }
+                    writer->latest = snapshot;
                 }
             }
-            auto const report = monitors::report(previous, sample);
-            auto set = [&](NvNmosMonitorDomain domain, std::optional<monitors::Status> const& status)
+            auto const statuses = monitors::judge(previous, snapshot);
+            for (std::size_t d = 0; d < statuses.size(); ++d)
             {
-                if (status && !nmos_monitor_set_status(&node.server, NVNMOS_SIDE_SENDER, writer->flow.name.c_str(), domain, status->value,
-                                  status->message.c_str()))
+                auto const& status = statuses[d];
+                if (status.status != MXL_MONITORING_BCP008_UNCHANGED &&
+                    !nmos_monitor_set_status(&node.server, NVNMOS_SIDE_SENDER, writer->flow.name.c_str(), Domains[d], status.status,
+                        status.message[0] != '\0' ? status.message : nullptr))
                 {
                     log("could not report the %s sender's monitor status", writer->flow.name.c_str());
                 }
-            };
-            set(NVNMOS_MONITOR_DOMAIN_LINK, report.link);
-            set(NVNMOS_MONITOR_DOMAIN_CONNECTION, report.transmission);
-            set(NVNMOS_MONITOR_DOMAIN_SYNCHRONIZATION, report.synchronization);
-            set(NVNMOS_MONITOR_DOMAIN_STREAM, report.essence);
+            }
         }
     }
 
