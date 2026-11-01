@@ -15,11 +15,12 @@ ARG MXL_SRC=https://github.com/qvest-digital/mxl.git
 ARG MXL_REF=c259243931333497e61faabeedac8048915dcb2b
 
 # libmxl-monitoring counts what mxl-gst-testsrc's writer calls return (patch
-# 0011); built into the same tree and linked statically. Checked out by
+# 0011) and judges mxl-writer-nmos's BCP-008 monitors (bcp008.h, from 0.6.0);
+# built into the same tree and linked statically. Checked out by
 # commit, which a moved tag cannot change; the tag names the release it is.
 # renovate: datasource=github-tags depName=marquies/libmxl-monitoring
-ARG MONITORING_TAG=v0.4.0
-ARG MONITORING_REF=8a3ec560da3773319c788fe2ecd6d838784d1557
+ARG MONITORING_TAG=v0.6.0
+ARG MONITORING_REF=449f446ca2ce341e3a885bce6c204fe071870253
 
 # NvNmos, NVIDIA's C API over nmos-cpp, provides the NMOS Node mxl-writer-nmos
 # runs: IS-04 registration, the IS-05 Connection API and BCP-007-03's MXL
@@ -29,7 +30,7 @@ ARG MONITORING_REF=8a3ec560da3773319c788fe2ecd6d838784d1557
 # as well, so a re-pushed tag cannot change the library under the build. libnvnmos.so links its own
 # dependencies statically and is built on the Debian release the go-mxl images
 # are; it does not link libmxl.
-ARG NVNMOS_IMAGE=ghcr.io/qvest-digital/dmf-mf-mxl-compositor/nvnmos:36fb7db9b5616a26f77164de735c15171e01aaed-59013af0@sha256:298270d13fb0f75a984c656bfdd469834c68a58a0749f2f5d5f68277258123b1
+ARG NVNMOS_IMAGE=ghcr.io/qvest-digital/dmf-mf-mxl-compositor/nvnmos:36fb7db9b5616a26f77164de735c15171e01aaed-b020ce30@sha256:74547fde461d8e6d61d551fdc080adf8eb9e7a33553d10a752d44a47b992f687
 
 FROM ${NVNMOS_IMAGE} AS nvnmos
 

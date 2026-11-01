@@ -1,5 +1,6 @@
 # Built inside the qvest-digital/mxl tree as tools/mxl-writer-nmos, beside
-# mxl-gst-testsrc, which it runs, and against the same toolchain.
+# mxl-gst-testsrc, which it runs, and against the same toolchain and
+# libmxl-monitoring, whose bcp008.h judges the Senders' monitors.
 
 include(GNUInstallDirs)
 
@@ -34,6 +35,7 @@ target_link_libraries(mxl-writer-nmos
             picojson::picojson
             fmt::fmt
             Threads::Threads
+            mxl-monitoring::mxl-monitoring
             ${NVNMOS_LIBRARY}
     )
 
@@ -41,7 +43,7 @@ add_executable(mxl-writer-nmos-tests)
 target_compile_features(mxl-writer-nmos-tests PRIVATE cxx_std_20)
 target_sources(mxl-writer-nmos-tests PRIVATE senders-test.cpp)
 target_include_directories(mxl-writer-nmos-tests PRIVATE ${PICOJSON_HEADERS} ${STATUS_SERVER_DIR})
-target_link_libraries(mxl-writer-nmos-tests PRIVATE picojson::picojson fmt::fmt Threads::Threads)
+target_link_libraries(mxl-writer-nmos-tests PRIVATE picojson::picojson fmt::fmt Threads::Threads mxl-monitoring::mxl-monitoring)
 
 # The conformance lane's reader of the flows, test/nmos/phase-probe.cpp,
 # where the image build copies it in. Built in the build stage only.

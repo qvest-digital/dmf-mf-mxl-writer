@@ -156,12 +156,14 @@ mxl-writer-nmos -d <domain> [-v <video flow json> ...] [-a <audio flow json> ...
 | `NMOS_SYSTEM_HOST` / `NMOS_SYSTEM_PORT` | *(the registry's)* | A fixed IS-09 System API. nmos-cpp serves it beside the registry |
 | `NMOS_DNS_DOMAIN` | *(the host name's domain, else the library default)* | DNS-SD domain to browse for a registry where none is fixed |
 | `NMOS_LABEL` / `NMOS_DESCRIPTION` | `MXL test writer` / `Test patterns written into MXL flows` | Node and Device label and description. A Sender is labelled `<label> video` or `<label> audio` |
+| `NMOS_CONTROL_PORT` | *(unset -- no IS-12)* | Port of an IS-12 Control Protocol websocket with an AMWA BCP-008 monitor per Sender. Needs `--metrics-port` |
 
 Only the `-x value` and `--name value` forms are taken. An option the test
 source does not take, an option without its value, a video option without
 `-v` or an audio option without `-a` exits with status 2, as does a flow id that
 is not a lowercase UUID, a missing `NMOS_HOST_ADDRESS` or `NMOS_SEED`, or no
-host name from `NMOS_HOST_NAME` or `NMOS_POD_NAMESPACE`.
+host name from `NMOS_HOST_NAME` or `NMOS_POD_NAMESPACE`, or `NMOS_CONTROL_PORT`
+without `--metrics-port`.
 
 | Sender | Flow | Format |
 |---|---|---|
@@ -202,6 +204,25 @@ names them changes nothing, and any other value is refused with 400.
   text. A process that is stopped or does not answer leaves its flow out of
   that scrape; the Node's port stays up. A port above 65533 exits with status
   2, one that cannot be bound with status 1.
+- With `NMOS_CONTROL_PORT` the Device advertises IS-12 on that port, with an
+  `NcSenderMonitor` (BCP-008-02) per Sender in a `sender-monitors` block,
+  linked to its Sender by a touchpoint. A monitor is active while its Sender
+  is. Once a second the Node reads each active Sender's process metrics and
+  reports the statuses libmxl-monitoring's `bcp008.h` judges from the counts
+  since the poll before; a status it leaves unchanged stays as it was:
+
+  | Status | From the writer |
+  |---|---|
+  | link | all up, or all down while the MXL domain is unavailable |
+  | transmission | unhealthy while the flow is not open, nothing is committed within a second or the process does not answer, or after the flow went away or a commit failed since the last poll; healthy otherwise |
+  | external synchronization | not used: MXL timestamps come from the Node's own clock |
+  | essence | unhealthy after invalid input, or input late for every write, since the last poll; partially healthy after some input late; healthy after input written in time; unchanged while nothing is written |
+
+  `GetTransmissionErrorCounters` answers `permission_denied`, `out_of_space` and
+  `write_error`, the failed commits and writes, counted since the last
+  `ResetCounters`, or since the process started where it started again after
+  that reset, as every activation starts it. Input late and invalid input count
+  towards the essence only.
 - `SIGTERM` stops the Node and then every process, against one 10 s
   deadline after which a process still running is killed. As the container's
   PID 1 it also reaps any process a writer leaves behind.
@@ -237,7 +258,8 @@ docker build -t dmf-mf-mxl-writer:dev .
 
 The build runs `mxl-writer-status-tests` and `mxl-writer-nmos-tests` and fails
 with them. They cover `tools/mxl-writer-status/status.hpp`, the HTTP server in
-`server.hpp`, and `tools/mxl-writer-nmos/senders.hpp` and `repeats.hpp`.
+`server.hpp`, and `tools/mxl-writer-nmos/senders.hpp`, `repeats.hpp` and
+`monitors.hpp`.
 
 Override defaults with `--build-arg`:
 
