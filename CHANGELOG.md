@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-rc.17](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.16...v1.0.0-rc.17) (2026-11-01)
+
+
+### Features
+
+* **nmos:** report each Sender's health over IS-12 BCP-008 ([#43](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/43)) ([34ed800](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/34ed800d6a1481a4174db627fcd0aa69cd44d585))
+* **testsrc:** write faults into a flow on command ([#44](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/44)) ([da9ebee](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/da9ebee4934966ddb34e7a4758382b10b1d28fef))
+
 ## [1.0.0-rc.16](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.15...v1.0.0-rc.16) (2026-10-28)
 
 
