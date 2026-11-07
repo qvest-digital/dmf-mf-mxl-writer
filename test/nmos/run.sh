@@ -5,6 +5,7 @@
 #   - the Node registers one Sender per flow, each naming the flow written and
 #     the domain written into, with the flow's format and group hint, no
 #     interface bindings, no manifest and a /transportfile that answers 404;
+#   - every Source and Flow carries the label of the Sender it belongs to;
 #   - every Sender's BCP-004-02 caps state the flow it writes;
 #   - both flows are written from the start;
 #   - deactivating a Sender stops its flow and nothing else, and activating it
