@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-rc.18](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.17...v1.0.0-rc.18) (2026-11-07)
+
+
+### Bug Fixes
+
+* **nmos:** label each Sender's Source and Flow ([#46](https://github.com/qvest-digital/dmf-mf-mxl-writer/issues/46)) ([61d54f5](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/61d54f5f270d65f482f420bab2cbc88e3e9187e7))
+
 ## [1.0.0-rc.17](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.16...v1.0.0-rc.17) (2026-11-01)
 
 
