@@ -5,6 +5,7 @@
 #   - the Node registers one Sender per flow, each naming the flow written and
 #     the domain written into, with the flow's format and group hint, no
 #     interface bindings, no manifest and a /transportfile that answers 404;
+#   - every Source and Flow carries the label of the Sender it belongs to;
 #   - every Sender's BCP-004-02 caps state the flow it writes;
 #   - both flows are written from the start;
 #   - deactivating a Sender stops its flow and nothing else, and activating it
@@ -169,6 +170,21 @@ audio_source=$(in_lane "$QUERY/flows/$audio_flow" | jq -r .source_id || true)
 got=$(in_lane "$QUERY/sources/$audio_source" | jq -c '.channels | length' || true)
 [ "$got" = 2 ] || { fail "the audio Source lists $got channels"; senders_rc=1; }
 [ $senders_rc -eq 0 ] && echo "PASS senders advertise the flows, the domain, the format and the group written"
+
+# A controller lists Sources and Flows by label, so each carries the label of
+# the Sender it belongs to rather than an empty one.
+labels_rc=0
+for tx in "$VIDEO_TX" "$AUDIO_TX"; do
+  [ -n "$tx" ] || continue
+  sender=$(in_lane "$QUERY/senders/$tx" || echo '{}')
+  flow=$(in_lane "$QUERY/flows/$(jq -r .flow_id <<<"$sender")" || echo '{}')
+  source=$(in_lane "$QUERY/sources/$(jq -r .source_id <<<"$flow")" || echo '{}')
+  got=$(jq -nc --argjson s "$sender" --argjson f "$flow" --argjson o "$source" \
+    '{sender: $s.label, flow: $f.label, source: $o.label}' 2>/dev/null || echo '{}')
+  jq -e '.sender != "" and .sender != null and .flow == .sender and .source == .sender' <<<"$got" >/dev/null \
+    || { fail "$tx Source and Flow labels are $got"; labels_rc=1; }
+done
+[ $labels_rc -eq 0 ] && echo "PASS every Source and Flow carries its Sender's label"
 
 # caps_unmet ID prints why a Sender's BCP-004-02 caps do not hold, nothing
 # where they do: caps carries constraint_sets and a version, and the Flow the
