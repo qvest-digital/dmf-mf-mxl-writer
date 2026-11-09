@@ -1,7 +1,7 @@
-From a35cc6e2442fd38f2beab24ddc19121ac5fd6735 Mon Sep 17 00:00:00 2001
+From 3c7d5ebd2a1f9efeaddfc101253bc1cd2784055d Mon Sep 17 00:00:00 2001
 From: Daniel Clasen <d.clasen@qvest-digital.com>
 Date: Thu, 22 Oct 2026 22:51:56 +0200
-Subject: [PATCH 8/9] feat(mxl-gst-testsrc): derive test content from the media
+Subject: [PATCH] feat(mxl-gst-testsrc): derive test content from the media
  time
 
 videotestsrc draws its ball from its frame counter and audiotestsrc
@@ -31,7 +31,7 @@ is an accumulator no seek reaches, and stays relative to the start.
  1 file changed, 149 insertions(+), 10 deletions(-)
 
 diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
-index 1800771..cc115f4 100644
+index 49923ba9..71d031e1 100644
 --- a/tools/mxl-gst/testsrc.cpp
 +++ b/tools/mxl-gst/testsrc.cpp
 @@ -1,7 +1,9 @@

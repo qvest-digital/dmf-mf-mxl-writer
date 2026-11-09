@@ -1,8 +1,7 @@
-From c8a9b66ea1bb0e76fdcab1b6694a1db279f0a877 Mon Sep 17 00:00:00 2001
+From 6e9734d96551d02185076de636a712ef9a1a91b2 Mon Sep 17 00:00:00 2001
 From: Daniel Clasen <d.clasen@qvest-digital.com>
 Date: Thu, 22 Oct 2026 23:32:33 +0200
-Subject: [PATCH 9/9] fix(mxl-gst-testsrc): commit audio samples at their own
- range
+Subject: [PATCH] fix(mxl-gst-testsrc): commit audio samples at their own range
 
 mxlFlowWriterOpenSamples takes the head index of the range, its end,
 exclusive, and the test source passed the index of the range's first
@@ -15,7 +14,7 @@ samples had the same offset.
  1 file changed, 6 insertions(+), 2 deletions(-)
 
 diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
-index cc115f4..8fd298d 100644
+index 71d031e1..effb7dd0 100644
 --- a/tools/mxl-gst/testsrc.cpp
 +++ b/tools/mxl-gst/testsrc.cpp
 @@ -907,8 +907,10 @@ namespace

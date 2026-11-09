@@ -1,4 +1,4 @@
-From daad24343909ff5a4f0e759a8967e1ebf94f4bb5 Mon Sep 17 00:00:00 2001
+From 1857ed9627f2302bf181909248470ce8a76324a2 Mon Sep 17 00:00:00 2001
 From: Daniel Clasen <d.clasen@qvest-digital.com>
 Date: Fri, 31 Jul 2026 19:47:34 +0200
 Subject: [PATCH] feat(mxl-gst-testsrc): expose waveform, per-channel frequency
@@ -22,7 +22,7 @@ it emits today.
  1 file changed, 57 insertions(+), 6 deletions(-)
 
 diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
-index ebac987..1800771 100644
+index 93b11bbc..49923ba9 100644
 --- a/tools/mxl-gst/testsrc.cpp
 +++ b/tools/mxl-gst/testsrc.cpp
 @@ -10,6 +10,7 @@

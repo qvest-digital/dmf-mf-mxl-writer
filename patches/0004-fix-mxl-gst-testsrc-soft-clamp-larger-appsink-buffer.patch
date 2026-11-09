@@ -1,7 +1,7 @@
-From 4d6c3852dbff0064d23c0e988a31466ac863a78c Mon Sep 17 00:00:00 2001
+From 67ca010e767d653b590911d2513452368a62a9cc Mon Sep 17 00:00:00 2001
 From: Alexander Erben <a.erben@qvest-digital.com>
 Date: Tue, 30 Jun 2026 09:05:01 +0200
-Subject: [PATCH 4/6] fix(mxl-gst-testsrc): soft clamp + larger appsink buffer
+Subject: [PATCH] fix(mxl-gst-testsrc): soft clamp + larger appsink buffer
  (kill residual jitter)
 
 Two follow-ups to the I420 overlay change, for the residual stutter that
@@ -28,7 +28,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
  1 file changed, 16 insertions(+), 10 deletions(-)
 
 diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
-index 0ad88d3..0c947ea 100644
+index 44730031..14898092 100644
 --- a/tools/mxl-gst/testsrc.cpp
 +++ b/tools/mxl-gst/testsrc.cpp
 @@ -389,7 +389,7 @@ namespace
@@ -71,3 +71,6 @@ index 0ad88d3..0c947ea 100644
                      {
                          gstGrainIndex = liveIndex;
                      }
+-- 
+2.55.0
+
