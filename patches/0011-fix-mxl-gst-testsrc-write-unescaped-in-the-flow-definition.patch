@@ -1,4 +1,4 @@
-From ff1bb183d7f2adfda3de9bb8f6b84dfb57482bf6 Mon Sep 17 00:00:00 2001
+From d3078aaa6d3dac3de1ae8189f0ea3b802ac5e003 Mon Sep 17 00:00:00 2001
 From: Daniel Clasen <d.clasen@qvest-digital.com>
 Date: Wed, 28 Oct 2026 03:14:07 +0100
 Subject: [PATCH] fix(mxl-gst-testsrc): write '/' unescaped in the flow
@@ -16,7 +16,7 @@ copies every other escape as it was.
  1 file changed, 25 insertions(+), 2 deletions(-)
 
 diff --git a/tools/mxl-gst/utils.hpp b/tools/mxl-gst/utils.hpp
-index 947e81f..c2c25f4 100644
+index 947e81f9..c2c25f45 100644
 --- a/tools/mxl-gst/utils.hpp
 +++ b/tools/mxl-gst/utils.hpp
 @@ -162,14 +162,37 @@ namespace json_utils

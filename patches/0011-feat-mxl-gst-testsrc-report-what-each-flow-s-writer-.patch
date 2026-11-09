@@ -1,4 +1,4 @@
-From 7c8dc2df0ce03c0a5eee9a1ed77b7de60a717b96 Mon Sep 17 00:00:00 2001
+From d1c9fe98582daba08f39ff77deb8b248d89989bd Mon Sep 17 00:00:00 2001
 From: marquies <me@patrickbreucking.de>
 Date: Wed, 28 Oct 2026 00:09:28 +0100
 Subject: [PATCH] feat(mxl-gst-testsrc): report what each flow's writer calls
@@ -24,7 +24,7 @@ listens.
  2 files changed, 68 insertions(+), 17 deletions(-)
 
 diff --git a/tools/mxl-gst/CMakeLists.txt b/tools/mxl-gst/CMakeLists.txt
-index 7bf0bb5..679aa8b 100644
+index 7bf0bb59..679aa8b4 100644
 --- a/tools/mxl-gst/CMakeLists.txt
 +++ b/tools/mxl-gst/CMakeLists.txt
 @@ -46,6 +46,7 @@ if (gstreamer_FOUND)
@@ -36,7 +36,7 @@ index 7bf0bb5..679aa8b 100644
                  fmt::fmt
                  picojson::picojson
 diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
-index 61a907d..ae94015 100644
+index d68aade7..fe9efc0e 100644
 --- a/tools/mxl-gst/testsrc.cpp
 +++ b/tools/mxl-gst/testsrc.cpp
 @@ -2,6 +2,7 @@
@@ -88,7 +88,7 @@ index 61a907d..ae94015 100644
              {
                  throw std::runtime_error{"Failed to create flow writer."};
              }
-@@ -899,18 +910,20 @@ namespace
+@@ -897,18 +908,20 @@ namespace
                              auto const actualGrainIndex = grainIndex - offset;
  
                              /// Open the grain for writing.
@@ -111,7 +111,7 @@ index 61a907d..ae94015 100644
  
                              grainIndex += 1U;
                          }
-@@ -930,7 +943,7 @@ namespace
+@@ -928,7 +941,7 @@ namespace
                              std::uint8_t* mxlBuffer = nullptr;
  
                              /// Open the grain for writing.
@@ -120,7 +120,7 @@ index 61a907d..ae94015 100644
                              {
                                  MXL_ERROR("Failed to open grain at index '{}'", actualGrainIndex);
                                  ::gst_buffer_unmap(pipelineSample.buffer(), &mapInfo);
-@@ -963,7 +976,7 @@ namespace
+@@ -961,7 +974,7 @@ namespace
                                  ::memcpy(mxlBuffer + batchOffset, mapInfo.data + batchOffset, nbSlices * sliceSize);
                                  gInfo.validSlices += nbSlices;
  
@@ -129,7 +129,7 @@ index 61a907d..ae94015 100644
                                  {
                                      MXL_ERROR("Failed to commit grain at index '{}'", actualGrainIndex);
                                      break;
-@@ -1046,8 +1059,8 @@ namespace
+@@ -1044,8 +1057,8 @@ namespace
  
                              // libmxl takes the end of the range, exclusive.
                              mxlMutableWrappedMultiBufferSlice payloadBuffersSlices;
@@ -140,7 +140,7 @@ index 61a907d..ae94015 100644
                              {
                                  MXL_ERROR("Failed to open samples at index '{}'", actualSampleIndex);
                                  break;
-@@ -1065,11 +1078,15 @@ namespace
+@@ -1063,11 +1076,15 @@ namespace
                                  }
                              }
  
@@ -157,7 +157,7 @@ index 61a907d..ae94015 100644
  
                              // Move to the next silence batch
                              nbSamples -= nbSamplesBatch;
-@@ -1087,8 +1104,8 @@ namespace
+@@ -1085,8 +1102,8 @@ namespace
  
                              auto payloadBuffersSlices = ::mxlMutableWrappedMultiBufferSlice{};
                              // libmxl takes the end of the range, exclusive.
@@ -168,7 +168,7 @@ index 61a907d..ae94015 100644
                              {
                                  MXL_ERROR("Failed to open samples at index '{}'", actualSampleIndex);
                                  ::gst_buffer_unmap(pipelineSample.buffer(), &mapInfo);
-@@ -1111,7 +1128,7 @@ namespace
+@@ -1109,7 +1126,7 @@ namespace
                                  }
                              }
  
@@ -177,7 +177,7 @@ index 61a907d..ae94015 100644
                              {
                                  MXL_ERROR("Failed to open samples at index '{}'", actualSampleIndex);
                                  ::gst_buffer_unmap(pipelineSample.buffer(), &mapInfo);
-@@ -1139,12 +1156,14 @@ namespace
+@@ -1137,12 +1154,14 @@ namespace
           * state.
           */
          constexpr MxlWriter() noexcept
@@ -193,7 +193,7 @@ index 61a907d..ae94015 100644
          mxlInstance _instance;
  
          mxlFlowWriter _writer;
-@@ -1236,8 +1255,31 @@ int main(int argc, char** argv)
+@@ -1234,8 +1253,31 @@ int main(int argc, char** argv)
      auto groupHintOpt = app.add_option("-g, --group-hint", groupHint, "The group-hint value to use in the flow json definition");
      groupHintOpt->default_val("mxl-gst-testsrc-group");
  
@@ -225,7 +225,7 @@ index 61a907d..ae94015 100644
      ::gst_init(nullptr, nullptr);
  
      auto threads = std::vector<std::thread>{};
-@@ -1257,7 +1299,8 @@ int main(int argc, char** argv)
+@@ -1255,7 +1297,8 @@ int main(int argc, char** argv)
                      }
  
                      json_utils::updateGroupHint(flowNmos, groupHint, "video");
@@ -235,7 +235,7 @@ index 61a907d..ae94015 100644
                      auto const frameWidth = static_cast<std::uint64_t>(json_utils::getField<double>(flowNmos, "frame_width"));
                      auto const frameHeight = static_cast<std::uint64_t>(json_utils::getField<double>(flowNmos, "frame_height"));
                      if (mxlWriter.maxCommitBatchSizeHint() > frameHeight)
-@@ -1302,7 +1345,8 @@ int main(int argc, char** argv)
+@@ -1300,7 +1343,8 @@ int main(int argc, char** argv)
                      auto const flowOptions = !audioFlowOptionFile.empty() ? readFile(audioFlowOptionFile) : std::string{};
                      json_utils::updateGroupHint(flowNmos, groupHint, "audio");
  
@@ -245,7 +245,7 @@ index 61a907d..ae94015 100644
  
                      auto const gstConfig = AudioPipelineConfig{
                          .sampleRate = json_utils::getRational(flowNmos, "sample_rate"),
-@@ -1337,5 +1381,11 @@ int main(int argc, char** argv)
+@@ -1335,5 +1379,11 @@ int main(int argc, char** argv)
  
      ::gst_deinit();
  
@@ -258,5 +258,5 @@ index 61a907d..ae94015 100644
      return g_failed ? 1 : 0;
  }
 -- 
-2.34.1
+2.55.0
 

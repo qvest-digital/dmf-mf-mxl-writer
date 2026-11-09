@@ -1,4 +1,4 @@
-From 9fd17a89f8b7e373ee00742c3bddc0dd33445d0f Mon Sep 17 00:00:00 2001
+From 7046180a06bbabbc52f2a4fdb12c5b4f2610032e Mon Sep 17 00:00:00 2001
 From: Daniel Clasen <d.clasen@qvest-digital.com>
 Date: Fri, 23 Oct 2026 03:10:48 +0200
 Subject: [PATCH] fix(mxl-gst-testsrc): realign the source once it keeps up
@@ -27,11 +27,11 @@ that ends a flow's thread, now ends the process with status 1 rather
 than leaving the other flow's thread holding it up.
 MXL_TESTSRC_REFUSE_REALIGN makes the seek count as refused, for tests.
 ---
- tools/mxl-gst/testsrc.cpp | 189 +++++++++++++++++++++++++++++++++-----
- 1 file changed, 165 insertions(+), 24 deletions(-)
+ tools/mxl-gst/testsrc.cpp | 183 +++++++++++++++++++++++++++++++++-----
+ 1 file changed, 161 insertions(+), 22 deletions(-)
 
 diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
-index 8fd298d..61a907d 100644
+index effb7dd0..d68aade7 100644
 --- a/tools/mxl-gst/testsrc.cpp
 +++ b/tools/mxl-gst/testsrc.cpp
 @@ -2,6 +2,7 @@
@@ -217,17 +217,16 @@ index 8fd298d..61a907d 100644
      };
  
      class VideoPipeline : public GstreamerPipeline
-@@ -704,12 +774,32 @@ namespace
+@@ -706,10 +776,28 @@ namespace
              // i.e. visibly janky motion even with zero dropped frames. One
              // batch makes the whole grain land at once, at the grain instant.
              auto slicesPerBatch = static_cast<std::uint16_t>(gstPipeline.config().frameHeight);
-+            // Set across a restart, until its first buffer: the next grain
-+            // is then already due, and waiting for it would spin.
++            // Set across a restart, until the first buffer after it.
 +            auto restarted = false;
 +            auto restartedAt = std::chrono::steady_clock::now();
-+            // Whether frames are being written at the clock rather than at
-+            // their own media time, how far behind they were when the lag
-+            // last grew, and at which grain.
++            // Whether frames are being written at the clock rather than their
++            // own media time, how far behind when the lag last grew, and at
++            // which grain.
 +            auto drifted = false;
 +            auto driftLag = std::uint64_t{0};
 +            auto driftSince = std::uint64_t{0};
@@ -235,24 +234,19 @@ index 8fd298d..61a907d 100644
 +            auto const steadyGrains = ::mxlTimestampToIndex(&gstPipeline.config().frameRate, 2'000'000'000ULL);
              while (!g_exit_requested)
              {
--                auto const timeoutNs = (grainIndex != MXL_UNDEFINED_INDEX) ? ::mxlGetNsUntilIndex(grainIndex + 1, &gstPipeline.config().frameRate)
--                                                                           : 100'000'000ULL; // arbitrary high timeout for the first grain
-+                auto const timeoutNs = (grainIndex != MXL_UNDEFINED_INDEX && !restarted)
-+                                         ? ::mxlGetNsUntilIndex(grainIndex + 1, &gstPipeline.config().frameRate)
-+                                         : 100'000'000ULL; // arbitrary high timeout for the first grain
 +                // A pipeline started again that produces nothing would leave
-+                // the flow unwritten with the process looking healthy.
++                // the flow unwritten and the process looking healthy.
 +                if (restarted && std::chrono::steady_clock::now() - restartedAt > std::chrono::seconds{5})
 +                {
 +                    throw std::runtime_error{"The test source produced no frame within 5 s of being started again."};
 +                }
-                 if (auto const pipelineSample = gstPipeline.pull(timeoutNs); pipelineSample)
+                 if (auto const pipelineSample = gstPipeline.pull(pullTimeoutNs); pipelineSample)
                  {
 +                    restarted = false;
                      auto const bufferTs = GST_BUFFER_PTS(pipelineSample.buffer()); // PTS was already converted to TAI time in the pull()
                      auto gstGrainIndex = ::mxlTimestampToIndex(&gstPipeline.config().frameRate, bufferTs);
  
-@@ -726,11 +816,58 @@ namespace
+@@ -726,11 +814,58 @@ namespace
                      // steady state. The gap on resync is still filled by the
                      // invalid-grain skip path below.
                      constexpr std::uint64_t kMaxLagGrains = 30; // ~1s at 30fps
@@ -313,7 +307,7 @@ index 8fd298d..61a907d 100644
  
                      // First buffer, set the initial grain index
                      if (grainIndex == MXL_UNDEFINED_INDEX)
-@@ -1144,10 +1281,12 @@ int main(int argc, char** argv)
+@@ -1144,10 +1279,12 @@ int main(int argc, char** argv)
                  catch (std::exception const& e)
                  {
                      MXL_ERROR("Error while processing video pipeline: {}", e.what());
@@ -326,7 +320,7 @@ index 8fd298d..61a907d 100644
                  }
              });
      }
-@@ -1181,10 +1320,12 @@ int main(int argc, char** argv)
+@@ -1181,10 +1318,12 @@ int main(int argc, char** argv)
                  catch (std::exception const& e)
                  {
                      MXL_ERROR("Error while processing audio pipeline: {}", e.what());
@@ -339,7 +333,7 @@ index 8fd298d..61a907d 100644
                  }
              });
      }
-@@ -1196,5 +1337,5 @@ int main(int argc, char** argv)
+@@ -1196,5 +1335,5 @@ int main(int argc, char** argv)
  
      ::gst_deinit();
  

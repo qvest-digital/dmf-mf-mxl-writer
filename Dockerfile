@@ -7,12 +7,12 @@
 # policy and the patch series applied on top.
 
 # renovate: datasource=docker depName=ghcr.io/qvest-digital/go-mxl-builder
-ARG GO_MXL_TAG=1.1.0-rc.7
+ARG GO_MXL_TAG=1.1.0-rc.14
 
 # MXL_SRC and MXL_REF are the repository and commit named in go-mxl's
 # .github/libmxl.version at GO_MXL_TAG.
 ARG MXL_SRC=https://github.com/qvest-digital/mxl.git
-ARG MXL_REF=c259243931333497e61faabeedac8048915dcb2b
+ARG MXL_REF=121615e37950e8ca2cc4a7b82e8e4a065a0cb323
 
 # libmxl-monitoring counts what mxl-gst-testsrc's writer calls return (patch
 # 0011) and judges mxl-writer-nmos's BCP-008 monitors (bcp008.h, from 0.6.0);

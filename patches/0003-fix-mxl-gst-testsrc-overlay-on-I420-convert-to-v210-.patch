@@ -1,8 +1,8 @@
-From b6dd1dc4ed77d4c860fce134ff9188adda26e8e6 Mon Sep 17 00:00:00 2001
+From 56ba1bc419c395a8ba128bb4a98414ebc42e1389 Mon Sep 17 00:00:00 2001
 From: Alexander Erben <a.erben@qvest-digital.com>
 Date: Tue, 30 Jun 2026 08:35:56 +0200
-Subject: [PATCH 3/6] fix(mxl-gst-testsrc): overlay on I420, convert to v210
- once at the end
+Subject: [PATCH] fix(mxl-gst-testsrc): overlay on I420, convert to v210 once
+ at the end
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -30,7 +30,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
  1 file changed, 11 insertions(+), 2 deletions(-)
 
 diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
-index a0780c0..0ad88d3 100644
+index 6d0d5f63..44730031 100644
 --- a/tools/mxl-gst/testsrc.cpp
 +++ b/tools/mxl-gst/testsrc.cpp
 @@ -342,12 +342,21 @@ namespace
@@ -57,3 +57,6 @@ index a0780c0..0ad88d3 100644
                  // leaky=downstream: drop the oldest buffer when full instead
                  // of back-pressuring the live source. Without this a slow
                  // consumer makes the source throttle to the consumer rate and
+-- 
+2.55.0
+

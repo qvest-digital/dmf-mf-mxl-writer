@@ -1,8 +1,8 @@
-From 2c6347aa6484d2347229d9bb8ee3fa27b8c5fe6a Mon Sep 17 00:00:00 2001
+From 9a3428dd227b0f987e1371607eafdefaf1feed77 Mon Sep 17 00:00:00 2001
 From: Alexander Erben <a.erben@qvest-digital.com>
 Date: Tue, 30 Jun 2026 09:28:55 +0200
-Subject: [PATCH 5/6] fix(mxl-gst-testsrc): commit each grain in one batch
- (halve PTS jitter)
+Subject: [PATCH] fix(mxl-gst-testsrc): commit each grain in one batch (halve
+ PTS jitter)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -27,12 +27,12 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
  1 file changed, 10 insertions(+), 1 deletion(-)
 
 diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
-index 0c947ea..1e0f3e0 100644
+index 14898092..d1b5ad8f 100644
 --- a/tools/mxl-gst/testsrc.cpp
 +++ b/tools/mxl-gst/testsrc.cpp
-@@ -520,7 +520,16 @@ namespace
+@@ -522,7 +522,16 @@ namespace
  
-             auto grainIndex = std::uint64_t{MXL_UNDEFINED_INDEX};
+             constexpr auto pullTimeoutNs = std::uint64_t{100'000'000ULL};
  
 -            auto slicesPerBatch = _configInfo.common.maxCommitBatchSizeHint;
 +            // Commit each grain in ONE batch. The default honours
@@ -47,4 +47,7 @@ index 0c947ea..1e0f3e0 100644
 +            auto slicesPerBatch = static_cast<std::uint16_t>(gstPipeline.config().frameHeight);
              while (!g_exit_requested)
              {
-                 auto const timeoutNs = (grainIndex != MXL_UNDEFINED_INDEX) ? ::mxlGetNsUntilIndex(grainIndex + 1, &gstPipeline.config().frameRate)
+                 if (auto const pipelineSample = gstPipeline.pull(pullTimeoutNs); pipelineSample)
+-- 
+2.55.0
+

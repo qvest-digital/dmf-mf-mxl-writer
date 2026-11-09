@@ -1,7 +1,7 @@
-From fae86f2430c6e525d91949ebf9ec0e36a6c53c98 Mon Sep 17 00:00:00 2001
+From 4599321f2e3ab90c718d8a7686842bdb00442d35 Mon Sep 17 00:00:00 2001
 From: Alexander Erben <a.erben@qvest-digital.com>
 Date: Thu, 25 Jun 2026 10:33:36 +0200
-Subject: [PATCH 1/6] fix(mxl-gst-testsrc): bound appsink queue so the producer
+Subject: [PATCH] fix(mxl-gst-testsrc): bound appsink queue so the producer
  can't drift
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -28,7 +28,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
  1 file changed, 20 insertions(+), 7 deletions(-)
 
 diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
-index c50cc5f..d543a7b 100644
+index cbdf3218..cf2787d4 100644
 --- a/tools/mxl-gst/testsrc.cpp
 +++ b/tools/mxl-gst/testsrc.cpp
 @@ -360,9 +360,25 @@ namespace
@@ -78,3 +78,6 @@ index c50cc5f..d543a7b 100644
  
                  if (auto const pipelineSample = gstPipeline.pull(timeoutNs); pipelineSample)
                  {
+-- 
+2.55.0
+

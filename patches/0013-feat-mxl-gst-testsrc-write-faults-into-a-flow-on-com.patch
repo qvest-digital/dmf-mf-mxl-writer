@@ -1,4 +1,4 @@
-From dd6227c4086ebc8c5064df16498f20ade37426f1 Mon Sep 17 00:00:00 2001
+From d74eaa3989afa7ecdd39498c7bd48a04de7314a5 Mon Sep 17 00:00:00 2001
 From: marquies <me@patrickbreucking.de>
 Date: Thu, 29 Oct 2026 13:10:13 +0100
 Subject: [PATCH] feat(mxl-gst-testsrc): write faults into a flow on command
@@ -239,7 +239,7 @@ index 00000000..5d22d6f2
 +    };
 +}
 diff --git a/tools/mxl-gst/testsrc.cpp b/tools/mxl-gst/testsrc.cpp
-index bdc8a949..7bf982d6 100644
+index e74b0232..e3a5b3ad 100644
 --- a/tools/mxl-gst/testsrc.cpp
 +++ b/tools/mxl-gst/testsrc.cpp
 @@ -5,6 +5,7 @@
@@ -272,14 +272,14 @@ index bdc8a949..7bf982d6 100644
          {
              if (_configInfo.common.format != MXL_DATA_FORMAT_VIDEO)
 @@ -800,6 +808,7 @@ namespace
+             auto lastRestart = std::chrono::steady_clock::now() - std::chrono::seconds{10};
              auto const steadyGrains = ::mxlTimestampToIndex(&gstPipeline.config().frameRate, 2'000'000'000ULL);
              while (!g_exit_requested)
              {
 +                pauseOnCommand();
-                 auto const timeoutNs = (grainIndex != MXL_UNDEFINED_INDEX && !restarted)
-                                          ? ::mxlGetNsUntilIndex(grainIndex + 1, &gstPipeline.config().frameRate)
-                                          : 100'000'000ULL; // arbitrary high timeout for the first grain
-@@ -952,6 +961,36 @@ namespace
+                 // A pipeline started again that produces nothing would leave
+                 // the flow unwritten and the process looking healthy.
+@@ -950,6 +959,36 @@ namespace
                              }
  
                              gInfo.validSlices = 0;
@@ -316,7 +316,7 @@ index bdc8a949..7bf982d6 100644
  
                              auto const sliceSize = gstPipeline.config().sliceSize;
  
-@@ -969,12 +1008,20 @@ namespace
+@@ -967,12 +1006,20 @@ namespace
                                  }
                              }
  
@@ -340,7 +340,7 @@ index bdc8a949..7bf982d6 100644
                                  gInfo.validSlices += nbSlices;
  
                                  if (::mxlMonitoringFlowWriterCommitGrain(_flow, _writer, &gInfo) != MXL_STATUS_OK)
-@@ -1017,6 +1064,7 @@ namespace
+@@ -1015,6 +1062,7 @@ namespace
              auto sampleIndex = std::uint64_t{MXL_UNDEFINED_INDEX};
              while (!g_exit_requested)
              {
@@ -348,7 +348,7 @@ index bdc8a949..7bf982d6 100644
                  auto const timeoutNs = (sampleIndex != MXL_UNDEFINED_INDEX)
                                           ? mxlGetNsUntilIndex(sampleIndex + samplesPerBatch, &gstPipeline.config().sampleRate)
                                           : 100'000'000ULL; // arbitrary high timeout for the first sample
-@@ -1165,6 +1213,24 @@ namespace
+@@ -1163,6 +1211,24 @@ namespace
  
      private:
          mxlMonitoringFlow _flow;
@@ -373,7 +373,7 @@ index bdc8a949..7bf982d6 100644
          mxlInstance _instance;
  
          mxlFlowWriter _writer;
-@@ -1184,6 +1250,24 @@ namespace
+@@ -1182,6 +1248,24 @@ namespace
      }
  }
  
@@ -398,7 +398,7 @@ index bdc8a949..7bf982d6 100644
  int main(int argc, char** argv)
  {
      std::signal(SIGINT, &signal_handler);
-@@ -1332,6 +1416,9 @@ int main(int argc, char** argv)
+@@ -1330,6 +1414,9 @@ int main(int argc, char** argv)
                      json_utils::updateGroupHint(flowNmos, groupHint, "video");
                      auto mxlWriter = MxlWriter{
                          monitoring, json_utils::getField<std::string>(flowNmos, "id"), domain, json_utils::serializeJson(flowNmos), flowOptions};
@@ -408,7 +408,7 @@ index bdc8a949..7bf982d6 100644
                      auto const frameWidth = static_cast<std::uint64_t>(json_utils::getField<double>(flowNmos, "frame_width"));
                      auto const frameHeight = static_cast<std::uint64_t>(json_utils::getField<double>(flowNmos, "frame_height"));
                      if (mxlWriter.maxCommitBatchSizeHint() > frameHeight)
-@@ -1378,6 +1465,9 @@ int main(int argc, char** argv)
+@@ -1376,6 +1463,9 @@ int main(int argc, char** argv)
  
                      auto mxlWriter = MxlWriter{
                          monitoring, json_utils::getField<std::string>(flowNmos, "id"), domain, json_utils::serializeJson(flowNmos), flowOptions};
@@ -419,5 +419,5 @@ index bdc8a949..7bf982d6 100644
                      auto const gstConfig = AudioPipelineConfig{
                          .sampleRate = json_utils::getRational(flowNmos, "sample_rate"),
 -- 
-2.34.1
+2.55.0
 
