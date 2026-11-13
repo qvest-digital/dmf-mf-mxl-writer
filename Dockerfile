@@ -7,7 +7,7 @@
 # policy and the patch series applied on top.
 
 # renovate: datasource=docker depName=ghcr.io/qvest-digital/go-mxl-builder
-ARG GO_MXL_TAG=1.1.0-rc.14
+ARG GO_MXL_TAG=1.1.0-rc.15
 
 # MXL_SRC and MXL_REF are the repository and commit named in go-mxl's
 # .github/libmxl.version at GO_MXL_TAG.
