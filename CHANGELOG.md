@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-rc.21](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.20...v1.0.0-rc.21) (2026-11-17)
+
+
+### Dependencies
+
+* **go-mxl:** update go-mxl to v1.1.0-rc.17 ([7326cd9](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/7326cd9e31f297a217c235bf94dbab7f894e8352))
+
+
+### Continuous Integration
+
+* generate an SBOM with Trivy and gate on fixable CVEs ([7326cd9](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/7326cd9e31f297a217c235bf94dbab7f894e8352))
+
 ## [1.0.0-rc.20](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.19...v1.0.0-rc.20) (2026-11-13)
 
 
