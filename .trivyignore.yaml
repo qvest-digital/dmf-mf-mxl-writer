@@ -1,0 +1,11 @@
+# Known vulnerabilities the gate in build.yml does not fail on.
+#
+# An entry names one vulnerability in one package version (its purl), so
+# the same finding in any other version fails the gate again. Each entry
+# expires; after expired_at it fails the gate again too. The statement
+# says why the finding is accepted until then. Accepted findings stay in
+# report.json and are listed as suppressed in the job summary.
+#
+# Format: https://trivy.dev/latest/docs/configuration/filtering/#trivyignoreyaml
+
+vulnerabilities: []
