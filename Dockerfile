@@ -26,11 +26,12 @@ ARG MONITORING_REF=449f446ca2ce341e3a885bce6c204fe071870253
 # runs: IS-04 registration, the IS-05 Connection API and BCP-007-03's MXL
 # transport. Its dependencies take the better part of an hour to compile, so it
 # is not built here: dmf-mf-mxl-compositor publishes it as an image tagged by
-# the NvNmos commit and the hash of the patches applied to it. Pinned by digest
-# as well, so a re-pushed tag cannot change the library under the build. libnvnmos.so links its own
-# dependencies statically and is built on the Debian release the go-mxl images
-# are; it does not link libmxl.
-ARG NVNMOS_IMAGE=ghcr.io/qvest-digital/dmf-mf-mxl-compositor/nvnmos:36fb7db9b5616a26f77164de735c15171e01aaed-713d795a@sha256:eae1eceee073d78f682cb4284de39eb1c2ddbd16e8586782296c3fb552e074d0
+# the NvNmos commit and the hash of the files that build it. Pinned by digest
+# as well, so a re-pushed tag cannot change the library under the build.
+# libnvnmos.so links its own dependencies statically and is built on the Debian
+# release the go-mxl images are; it does not link libmxl. The image carries its
+# own SBOM fragment: NvNmos with its patches and the conan packages it links.
+ARG NVNMOS_IMAGE=ghcr.io/qvest-digital/dmf-mf-mxl-compositor/nvnmos:36fb7db9b5616a26f77164de735c15171e01aaed-da92b698@sha256:30cc0e9a24386451dce224dbcc143891a7ee05f09e838db9aee357bd3f43018c
 
 FROM ${NVNMOS_IMAGE} AS nvnmos
 
@@ -43,8 +44,12 @@ ARG MONITORING_REF
 # opentelemetry-cpp with its OTLP/HTTP exporter, for libmxl-monitoring's OTLP
 # exporter (patch 0012). go-mxl-builder does not carry it; installed from the
 # image's vcpkg ports in classic mode, in a layer of its own that only a new
-# GO_MXL_TAG rebuilds.
-RUN /root/vcpkg/vcpkg install "opentelemetry-cpp[otlp-http]" --x-install-root=/opt/otel
+# GO_MXL_TAG rebuilds. What this image builds from source is recorded with
+# sbom.sh in the RUN that builds it, as /opt/mxl-writer/share/sbom/; CI merges
+# that into the image SBOM, which lists none of it otherwise.
+COPY sbom.sh /tmp/sbom.sh
+RUN /root/vcpkg/vcpkg install "opentelemetry-cpp[otlp-http]" --x-install-root=/opt/otel \
+ && sh /tmp/sbom.sh vcpkg /opt/mxl-writer/share/sbom/opentelemetry-cpp.cdx.json /opt/otel
 
 WORKDIR /src
 COPY patches/ /patches/
@@ -55,9 +60,13 @@ COPY patches/ /patches/
 # whether MXL_REF is a SHA, branch, or tag.
 RUN git clone "${MXL_SRC}" . \
  && git checkout "${MXL_REF}" \
- && git apply /patches/*.patch
+ && git apply /patches/*.patch \
+ && sh /tmp/sbom.sh git /opt/mxl-writer/share/sbom/mxl-writer.cdx.json \
+      mxl-tools . /patches/*.patch
 RUN git clone https://github.com/marquies/libmxl-monitoring.git libmxl-monitoring \
  && git -C libmxl-monitoring checkout "${MONITORING_REF}" \
+ && sh /tmp/sbom.sh git /opt/mxl-writer/share/sbom/mxl-writer.cdx.json \
+      libmxl-monitoring libmxl-monitoring \
  && echo 'add_subdirectory(libmxl-monitoring)' >> CMakeLists.txt
 
 # go-mxl-builder ships vcpkg with stduuid + spdlog + fmt + libfabric
@@ -131,6 +140,8 @@ COPY --from=build /src/build/tools/mxl-writer-status/mxl-writer-status /usr/bin/
 COPY --from=build /src/build/tools/mxl-writer-nmos/mxl-writer-nmos     /usr/bin/mxl-writer-nmos
 COPY --from=nvnmos /opt/nvnmos/lib/libnvnmos.so /usr/local/lib/
 RUN ldconfig
+COPY --from=nvnmos /opt/nvnmos/share/sbom/ /opt/nvnmos/share/sbom/
+COPY --from=build /opt/mxl-writer/share/sbom/ /opt/mxl-writer/share/sbom/
 
 # Flow definition template the producer script substitutes per-flow UUIDs
 # into before handing the rendered JSON to mxl-gst-testsrc -v. Path

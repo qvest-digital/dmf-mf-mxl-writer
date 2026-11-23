@@ -80,12 +80,15 @@ jobs:
       # and the gate below are all derived from this one CycloneDX SBOM, so
       # what a finding was matched against is the file that is kept.
       #
-      # What go-mxl builds from source (libmxl, libfabric, rdma-core, the
-      # vcpkg ports) is recorded by no package manager, so Trivy cannot see
-      # it. go-mxl-runtime carries it as CycloneDX fragments under
-      # /opt/*/share/sbom/, and their components are appended here. The
-      # two go-mxl writes are required by name, so losing one fails the
-      # step; the glob still picks up any fragment added later.
+      # What is built from source (in go-mxl libmxl, libfabric, rdma-core
+      # and the vcpkg ports; here the patched mxl tools, libmxl-monitoring
+      # and opentelemetry-cpp; NvNmos and its conan packages) is recorded by
+      # no package manager, so Trivy cannot see it. The image carries it as
+      # CycloneDX fragments under /opt/*/share/sbom/, and their components
+      # are merged in here by bom-ref, since Trivy reads the conan entries
+      # of the NvNmos fragment itself. Every fragment is required by name,
+      # so losing one fails the step; the glob still picks up any added
+      # later.
       - name: Generate SBOM and vulnerability report
         env:
           REF: ${{ env.IMAGE }}:${{ steps.tags.outputs.sha }}
@@ -96,8 +99,11 @@ jobs:
             docker run --rm --entrypoint sh "$REF" -c '
               test -f /opt/libfabric/share/sbom/libfabric-stack.cdx.json &&
               test -f /opt/libmxl/share/sbom/libmxl.cdx.json &&
+              test -f /opt/nvnmos/share/sbom/nvnmos.cdx.json &&
+              test -f /opt/mxl-writer/share/sbom/mxl-writer.cdx.json &&
+              test -f /opt/mxl-writer/share/sbom/opentelemetry-cpp.cdx.json &&
               cat /opt/*/share/sbom/*.cdx.json'
-          } | jq -s '.[0].components += [.[1:][].components[]] | .[0]' > sbom.cdx.json
+          } | jq -s '.[0].components = ([.[].components[]] | unique_by(.["bom-ref"])) | .[0]' > sbom.cdx.json
           trivy sbom --quiet --format spdx-json --output sbom.spdx.json sbom.cdx.json
           trivy sbom --quiet --format json --output report.json sbom.cdx.json
           # What the gate below sees, and what .trivyignore.yaml accepts.
