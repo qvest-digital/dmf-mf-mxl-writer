@@ -275,10 +275,13 @@ docker build \
 
 ## Tag bump policy
 
-`GO_MXL_TAG` must match the `ARG GO_MXL_TAG` in
-[`qvest-digital/mxl-k8s`](https://github.com/qvest-digital/mxl-k8s)'s
-`docker/gateway.Dockerfile`, so the producer and the gateway run the same
-libmxl and libfabric.
+Every process on an MXL domain must load a byte-identical `libmxl.so`, the
+gateway of [`qvest-digital/mxl-k8s`](https://github.com/qvest-digital/mxl-k8s)
+included. A `GO_MXL_TAG` bump that changes `/opt/libmxl/lib/libmxl.so*` of the
+runtime image is therefore safe only together with the same change in every
+other image on the domain; one that leaves the library byte-identical is local
+to this image. Compare the library of the old and new runtime image before
+accepting a bump.
 
 `MXL_SRC` and `MXL_REF` are the repository and commit that go-mxl's
 `.github/libmxl.version` names at `GO_MXL_TAG`, the libmxl
