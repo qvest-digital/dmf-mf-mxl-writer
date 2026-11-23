@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-rc.22](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.21...v1.0.0-rc.22) (2026-11-23)
+
+
+### Dependencies
+
+* **writer:** update go-mxl to v1.1.0-rc.18 ([e9e9157](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/e9e91577e050d0e8350eb424ce2887e00028e5d0))
+
+
+### Build System
+
+* record the components built here in the SBOM ([e9e9157](https://github.com/qvest-digital/dmf-mf-mxl-writer/commit/e9e91577e050d0e8350eb424ce2887e00028e5d0))
+
 ## [1.0.0-rc.21](https://github.com/qvest-digital/dmf-mf-mxl-writer/compare/v1.0.0-rc.20...v1.0.0-rc.21) (2026-11-17)
 
 
